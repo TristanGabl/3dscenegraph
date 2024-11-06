@@ -3,10 +3,9 @@ import glob
 import multiprocessing as mp
 import os
 
-# fmt: off
-import sys
 
-# fmt: on
+import sys
+sys.path.insert(1, '/teamspace/studios/this_studio/Mask2Former')
 
 import tempfile
 import time
@@ -21,7 +20,7 @@ from detectron2.data.detection_utils import read_image
 from detectron2.projects.deeplab import add_deeplab_config
 from detectron2.utils.logger import setup_logger
 
-from mask2former import add_maskformer2_config
+from mask2former import add_maskformer2_config 
 from predictor import VisualizationDemo
 
 import torch
