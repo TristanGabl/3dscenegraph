@@ -3,6 +3,7 @@ import glob
 import multiprocessing as mp
 import os
 
+import pickle
 
 import sys
 sys.path.insert(1, os.path.join(sys.path[0], '..'))
@@ -50,9 +51,8 @@ def get_parser():
     )
     
     parser.add_argument(
-        "--input",
+        "--input_images",
         nargs="+",
-        default=["../Blue-Reef-House-Bedroom-1-Cairns-Kangarooms-Student-Living.jpg"],
         help="A list of space separated input images; "
         "or a single glob pattern such as 'directory/*.jpg'",
     )
@@ -84,7 +84,7 @@ def main():
     logger = setup_logger()
     logger.info("Arguments: " + str(args))
 
-    
+    create_pre_processed = True
 
     if torch.cuda.is_available():
         args.opts = ["MODEL.DEVICE", "cuda"] + args.opts
@@ -92,17 +92,40 @@ def main():
         args.opts = ["MODEL.DEVICE", "cpu"] + args.opts
 
     cfg = setup_cfg(args)
-    
+
     demo = VisualizationDemo(cfg)
 
-    if len(args.input) == 1:
-        args.input = glob.glob(os.path.expanduser(args.input[0]))
-        assert args.input, "The input path(s) was not found"
-    for path in tqdm.tqdm(args.input, disable=not args.output):
+    if len(args.input_images) == 1:
+        args.input_images = glob.glob(os.path.expanduser(args.input_images[0]))
+        assert args.input_images, "The input path(s) was not found"
+    
+    # we extract the numbers from the input image paths (exmaple: frame_00188.jpg) and create a copy of args.input with the paths from the json file
+
+    # create list to store the json paths
+    json_paths = []
+    for path in args.input_images: 
+        json_path = path.replace('jpg', 'json')
+        json_paths.append(json_path)
+
+    panoptic_segs = []
+    for path in tqdm.tqdm(args.input_images, disable=not args.output):
         # use PIL, to be consistent with evaluation
         img = read_image(path, format="BGR")
         start_time = time.time()
         predictions, visualized_output = demo.run_on_image(img)
+
+        # predictions.keys() = dict_keys(['sem_seg', 'panoptic_seg', 'instances'])
+        # type(predictions("instances")) = detectron2.structures.instances.Instances
+        # debug predictions["panoptic_seg"][0]: cv2.imwrite(os.path.join(os.getcwd(), 'output', 'debug{}.png'.format(path.split('/')[-1].replace('.jpg', ''))), 100 * predictions["panoptic_seg"][0].cpu().numpy().astype(np.uint8))
+        # debug predictions["sem_seg"]: cv2.imwrite(os.path.join(os.getcwd(), 'output', 'debug{}.png'.format(path.split('/')[-1].replace('.jpg', ''))), 100 * predictions["sem_seg"][0].cpu().numpy().astype(np.uint8))
+
+        # save panoptic segmentation
+        panoptic_seg = predictions["panoptic_seg"][0].cpu().numpy()
+        if (create_pre_processed):
+            with open(args.output.split("/")[:-1] + "/small_3DScannerApp_export" + path.split('/')[-1].replace('.jpg', '.pkl'), 'wb') as f:
+                pickle.dump(panoptic_seg, f)
+            
+
         logger.info(
             "{}: {} in {:.2f}s".format(
                 path,
@@ -118,7 +141,7 @@ def main():
                 assert os.path.isdir(args.output), args.output
                 out_filename = os.path.join(args.output, "segmented_" + os.path.basename(path))
             else:
-                assert len(args.input) == 1, "Please specify a directory with args.output"
+                assert len(args.input_images) == 1, "Please specify a directory with args.output"
                 out_filename = args.output
             visualized_output.save(out_filename)
 
