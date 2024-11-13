@@ -5,7 +5,12 @@ import os
 
 
 import sys
+sys.path.insert(1, os.path.join(sys.path[0], '..'))
 sys.path.insert(1, '/teamspace/studios/this_studio/Mask2Former')
+sys.path.insert(1, '/teamspace/studios/this_studio/Mask2Former/demo')
+
+# change working directory to this folder 
+os.chdir('/teamspace/studios/this_studio/3dscenegraph')
 
 import tempfile
 import time
@@ -21,8 +26,7 @@ from detectron2.projects.deeplab import add_deeplab_config
 from detectron2.utils.logger import setup_logger
 
 from mask2former import add_maskformer2_config 
-from predictor import VisualizationDemo
-
+from Mask2Former.demo.predictor import VisualizationDemo
 import torch
 
 def setup_cfg(args):
@@ -40,7 +44,7 @@ def get_parser():
     parser = argparse.ArgumentParser(description="maskformer2 demo for builtin configs")
     parser.add_argument(
         "--config-file",
-        default="configs/coco/panoptic-segmentation/maskformer2_R50_bs16_50ep.yaml",
+        default="../Mask2Former/configs/coco/panoptic-segmentation/maskformer2_R50_bs16_50ep.yaml",
         metavar="FILE",
         help="path to config file",
     )
@@ -48,12 +52,13 @@ def get_parser():
     parser.add_argument(
         "--input",
         nargs="+",
+        default=["../Blue-Reef-House-Bedroom-1-Cairns-Kangarooms-Student-Living.jpg"],
         help="A list of space separated input images; "
         "or a single glob pattern such as 'directory/*.jpg'",
     )
     parser.add_argument(
         "--output",
-        default="/teamspace/studios/this_studio/3dscenegraph/output", 
+        default="output", 
         help="A file or directory to save output visualizations. "
         "If not given, will show output in an OpenCV window.",
     )
@@ -67,27 +72,28 @@ def get_parser():
     parser.add_argument(
         "--opts",
         help="Modify config options using the command-line 'KEY VALUE' pairs",
-        default=["MODEL.WEIGHTS /teamspace/studios/this_studio/Mask2Former/model_weights/model_final_94dc52.pkl"],
+        default=["MODEL.WEIGHTS", "../Mask2Former/model_weights/model_final_94dc52.pkl"],
         nargs=argparse.REMAINDER,
     )
     return parser
 
 def main():
+    mp.set_start_method("spawn", force=True)
     args = get_parser().parse_args()
-
-    # Load config from file and command-line options
-   # Load config from file and command-line options
-    cfg = get_cfg()
-
-    if args.input is None:
-        cfg.input = "/teamspace/studios/this_studio/3dscenegraph/input"
+    setup_logger(name="fvcore")
+    logger = setup_logger()
+    logger.info("Arguments: " + str(args))
 
     
+
     if torch.cuda.is_available():
-        cfg.MODEL.DEVICE = "cuda"
+        args.opts = ["MODEL.DEVICE", "cuda"] + args.opts
     else:
-        cfg.MODEL.DEVICE = "cpu"
+        args.opts = ["MODEL.DEVICE", "cpu"] + args.opts
+
+    cfg = setup_cfg(args)
     
+    demo = VisualizationDemo(cfg)
 
     if len(args.input) == 1:
         args.input = glob.glob(os.path.expanduser(args.input[0]))
@@ -110,7 +116,7 @@ def main():
         if args.output:
             if os.path.isdir(args.output):
                 assert os.path.isdir(args.output), args.output
-                out_filename = os.path.join(args.output, os.path.basename(path))
+                out_filename = os.path.join(args.output, "segmented_" + os.path.basename(path))
             else:
                 assert len(args.input) == 1, "Please specify a directory with args.output"
                 out_filename = args.output
