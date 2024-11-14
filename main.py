@@ -26,6 +26,10 @@ from detectron2.data.detection_utils import read_image
 from detectron2.projects.deeplab import add_deeplab_config
 from detectron2.utils.logger import setup_logger
 
+from detectron2.data import MetadataCatalog
+from detectron2.engine.defaults import DefaultPredictor
+from detectron2.utils.visualizer import ColorMode, Visualizer
+
 from mask2former import add_maskformer2_config 
 from Mask2Former.demo.predictor import VisualizationDemo
 import torch
@@ -42,25 +46,25 @@ def setup_cfg(args):
 
 
 def get_parser():
-    parser = argparse.ArgumentParser(description="maskformer2 demo for builtin configs")
+    parser = argparse.ArgumentParser(description="3dscenegraph pipeline using mask2former")
     parser.add_argument(
         "--config-file",
         default="../Mask2Former/configs/coco/panoptic-segmentation/maskformer2_R50_bs16_50ep.yaml",
         metavar="FILE",
-        help="path to config file",
+        help="path to config file (default set in main.py)",
     )
     
     parser.add_argument(
-        "--input_images",
-        nargs="+",
-        help="A list of space separated input images; "
-        "or a single glob pattern such as 'directory/*.jpg'",
+        "--input",
+        nargs=1,
+        required=True,
+        help="A directory of a scan from '3D Scanner App'; "
+        "The directory should be a full export of a scan, containing images and json files etc.",
     )
     parser.add_argument(
         "--output",
         default="output", 
-        help="A file or directory to save output visualizations. "
-        "If not given, will show output in an OpenCV window.",
+        help="A file or directory to save output visualizations."
     )
 
     parser.add_argument(
@@ -71,7 +75,8 @@ def get_parser():
     )
     parser.add_argument(
         "--opts",
-        help="Modify config options using the command-line 'KEY VALUE' pairs",
+        help="Modify config options using the command-line 'KEY VALUE' pairs (default set in main.py); "
+        "example: MODEL.WEIGHTS /path/to/model_checkpoint.pkkl",
         default=["MODEL.WEIGHTS", "../Mask2Former/model_weights/model_final_94dc52.pkl"],
         nargs=argparse.REMAINDER,
     )
@@ -84,7 +89,8 @@ def main():
     logger = setup_logger()
     logger.info("Arguments: " + str(args))
 
-    create_pre_processed = True
+    save_visualization = True
+
 
     if torch.cuda.is_available():
         args.opts = ["MODEL.DEVICE", "cuda"] + args.opts
@@ -93,57 +99,80 @@ def main():
 
     cfg = setup_cfg(args)
 
-    demo = VisualizationDemo(cfg)
+    mask2former_predictor = DefaultPredictor(cfg)
 
-    if len(args.input_images) == 1:
-        args.input_images = glob.glob(os.path.expanduser(args.input_images[0]))
-        assert args.input_images, "The input path(s) was not found"
+    if os.path.isdir(args.input[0]):
+        input_images = glob.glob(os.path.expanduser(args.input[0] + '/frame_*.jpg'))
+        assert input_images, "Provided input directory does not contain any images, check if it is a directory of a scan from '3D Scanner App'"
     
     # we extract the numbers from the input image paths (exmaple: frame_00188.jpg) and create a copy of args.input with the paths from the json file
 
     # create list to store the json paths
     json_paths = []
-    for path in args.input_images: 
+    for path in input_images: 
         json_path = path.replace('jpg', 'json')
         json_paths.append(json_path)
 
+    print("\n\n")
+    
     panoptic_segs = []
-    for path in tqdm.tqdm(args.input_images, disable=not args.output):
+    for path in tqdm.tqdm(input_images, disable=not args.output):
         # use PIL, to be consistent with evaluation
-        img = read_image(path, format="BGR")
+        image = read_image(path, format="BGR")
         start_time = time.time()
-        predictions, visualized_output = demo.run_on_image(img)
+
+        path_image_output = os.path.join(args.output, *path.split('/')[-2:])
+        path_inference_output = path_image_output.replace('.jpg', '.pkl')
+
+        if not os.path.exists(path_inference_output):
+            # create folder if not exists
+            os.makedirs(os.path.dirname(path_inference_output), exist_ok=True)
+            # run inference
+
+            predictions = mask2former_predictor(image)
+            # Convert image from OpenCV BGR format to Matplotlib RGB format.
+            image = image[:, :, ::-1]
+            visualizer = Visualizer(image, 
+                                    MetadataCatalog.get(cfg.DATASETS.TEST[0] if len(cfg.DATASETS.TEST) else "__unused"), 
+                                    instance_mode=ColorMode.IMAGE
+                                    )
+            
+            panoptic_seg, segments_info = predictions["panoptic_seg"]
+
+            logger.info(
+                "{}: {} in {:.2f}s".format(
+                    path,
+                    "detected {} panoptic segments".format(len(predictions["panoptic_seg"]))
+                    if "panoptic_seg" in predictions
+                    else "finished",
+                    time.time() - start_time,
+                )
+            )
+            # save inference output
+            with open(path_inference_output, 'wb') as f:
+                pickle.dump(predictions["panoptic_seg"], f)
+            
+            if save_visualization:
+                assert "panoptic_seg" in predictions
+                vis_output = visualizer.draw_panoptic_seg_predictions(panoptic_seg.to(torch.device("cpu")), segments_info)
+                vis_output.save(os.path.join(args.output, *path.split('/')[-2:]))
+        else:
+            logger.info(
+                "{}: found pre-processed, skipping".format(
+                    path
+                )
+            )
+        
 
         # predictions.keys() = dict_keys(['sem_seg', 'panoptic_seg', 'instances'])
         # type(predictions("instances")) = detectron2.structures.instances.Instances
         # debug predictions["panoptic_seg"][0]: cv2.imwrite(os.path.join(os.getcwd(), 'output', 'debug{}.png'.format(path.split('/')[-1].replace('.jpg', ''))), 100 * predictions["panoptic_seg"][0].cpu().numpy().astype(np.uint8))
         # debug predictions["sem_seg"]: cv2.imwrite(os.path.join(os.getcwd(), 'output', 'debug{}.png'.format(path.split('/')[-1].replace('.jpg', ''))), 100 * predictions["sem_seg"][0].cpu().numpy().astype(np.uint8))
+        
+        # project 3d point cloud into each 2d image and record the panoptic segmentation onto the 3d point cloud
+        
+        
 
-        # save panoptic segmentation
-        panoptic_seg = predictions["panoptic_seg"][0].cpu().numpy()
-        if (create_pre_processed):
-            with open(args.output.split("/")[:-1] + "/small_3DScannerApp_export" + path.split('/')[-1].replace('.jpg', '.pkl'), 'wb') as f:
-                pickle.dump(panoptic_seg, f)
-            
-
-        logger.info(
-            "{}: {} in {:.2f}s".format(
-                path,
-                "detected {} instances".format(len(predictions["instances"]))
-                if "instances" in predictions
-                else "finished",
-                time.time() - start_time,
-            )
-        )
-
-        if args.output:
-            if os.path.isdir(args.output):
-                assert os.path.isdir(args.output), args.output
-                out_filename = os.path.join(args.output, "segmented_" + os.path.basename(path))
-            else:
-                assert len(args.input_images) == 1, "Please specify a directory with args.output"
-                out_filename = args.output
-            visualized_output.save(out_filename)
 
 if __name__ == "__main__":
     main()
