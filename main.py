@@ -4,6 +4,7 @@ import multiprocessing as mp
 import os
 
 import pickle
+import trimesh
 
 import sys
 sys.path.insert(1, os.path.join(sys.path[0], '..'))
@@ -107,21 +108,15 @@ def main():
     
     # we extract the numbers from the input image paths (exmaple: frame_00188.jpg) and create a copy of args.input with the paths from the json file
 
-    # create list to store the json paths
-    json_paths = []
-    for path in input_images: 
-        json_path = path.replace('jpg', 'json')
-        json_paths.append(json_path)
-
     print("\n\n")
-    
-    panoptic_segs = []
+    processed_input_images = []
     for path in tqdm.tqdm(input_images, disable=not args.output):
         # use PIL, to be consistent with evaluation
         image = read_image(path, format="BGR")
         start_time = time.time()
 
         path_image_output = os.path.join(args.output, *path.split('/')[-2:])
+        processed_input_images.append(path_image_output)
         path_inference_output = path_image_output.replace('.jpg', '.pkl')
 
         if not os.path.exists(path_inference_output):
@@ -132,12 +127,7 @@ def main():
             predictions = mask2former_predictor(image)
             # Convert image from OpenCV BGR format to Matplotlib RGB format.
             image = image[:, :, ::-1]
-            visualizer = Visualizer(image, 
-                                    MetadataCatalog.get(cfg.DATASETS.TEST[0] if len(cfg.DATASETS.TEST) else "__unused"), 
-                                    instance_mode=ColorMode.IMAGE
-                                    )
             
-            panoptic_seg, segments_info = predictions["panoptic_seg"]
 
             logger.info(
                 "{}: {} in {:.2f}s".format(
@@ -154,6 +144,11 @@ def main():
             
             if save_visualization:
                 assert "panoptic_seg" in predictions
+                panoptic_seg, segments_info = predictions["panoptic_seg"]
+                visualizer = Visualizer(image, 
+                                    MetadataCatalog.get(cfg.DATASETS.TEST[0] if len(cfg.DATASETS.TEST) else "__unused"), 
+                                    instance_mode=ColorMode.IMAGE
+                                    )
                 vis_output = visualizer.draw_panoptic_seg_predictions(panoptic_seg.to(torch.device("cpu")), segments_info)
                 vis_output.save(os.path.join(args.output, *path.split('/')[-2:]))
         else:
@@ -163,15 +158,25 @@ def main():
                 )
             )
         
-
         # predictions.keys() = dict_keys(['sem_seg', 'panoptic_seg', 'instances'])
         # type(predictions("instances")) = detectron2.structures.instances.Instances
         # debug predictions["panoptic_seg"][0]: cv2.imwrite(os.path.join(os.getcwd(), 'output', 'debug{}.png'.format(path.split('/')[-1].replace('.jpg', ''))), 100 * predictions["panoptic_seg"][0].cpu().numpy().astype(np.uint8))
         # debug predictions["sem_seg"]: cv2.imwrite(os.path.join(os.getcwd(), 'output', 'debug{}.png'.format(path.split('/')[-1].replace('.jpg', ''))), 100 * predictions["sem_seg"][0].cpu().numpy().astype(np.uint8))
         
-        # project 3d point cloud into each 2d image and record the panoptic segmentation onto the 3d point cloud
+    # project 3d point cloud into each 2d image and record the panoptic segmentation onto the 3d point cloud
+
+    # load the 3d point cloud
+    mesh = trimesh.load(os.path.join(args.input[0], 'export_refined.obj'))
+
+
+    for processed_input_image in processed_input_images:
+        print(processed_input_image)
+        # Load the 3d point cloud
+        # Load the panoptic segmentation
+        # Project the panoptic segmentation onto the 3d point cloud
+        # Save the 3d point cloud with the panoptic segmentation
         
-        
+
 
 
 if __name__ == "__main__":
