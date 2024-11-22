@@ -94,9 +94,30 @@ def project_point_mvp(p_in, mvp, image_width, image_height):
     pos_x = e0[:, 0]
     pos_y = e0[:, 1]
     projections = np.zeros([p_in.shape[0], 2])
-    projections[:,0] = (0.5 + (pos_x) * 0.5) * image_width 
+    projections[:,0] = (0.5 + (pos_x) * 0.5) * image_width
     projections[:,1] = (1.0 - (0.5 + (pos_y) * 0.5)) * image_height
     return projections
+
+
+def project(vertices, cameraPoseARFrame, projectionMatrix, image_width, image_height):
+    # Ensure vertices are in homogeneous coordinates (x, y, z, 1)
+    vertices_homogeneous = np.hstack((vertices, np.ones((vertices.shape[0], 1))))
+
+    # Step 1: Apply the camera pose (cameraPoseARFrame) to the vertices
+    vertices_camera_space = (cameraPoseARFrame @ vertices_homogeneous.T).T
+
+    # Step 2: Apply the projection matrix
+    projected_vertices_homogeneous = (projectionMatrix @ vertices_camera_space.T).T
+
+    # Step 3: Convert from homogeneous coordinates to 2D by dividing by w
+    projected_vertices = projected_vertices_homogeneous[:, :2] / projected_vertices_homogeneous[:, 3][:, np.newaxis]
+
+    # Step 4: Rescale to pixel coordinates based on image dimensions
+    x_pixel = (projected_vertices[:, 1] + 1) / 2 * image_width  # Map from [-1, 1] to [0, width]
+    y_pixel = (1 - (projected_vertices[:, 0] + 1) / 2) * image_height  # Invert y-axis and map to [0, height]
+
+    return np.vstack((x_pixel, y_pixel)).T
+
 
 def main():
     mp.set_start_method("spawn", force=True)
@@ -107,12 +128,17 @@ def main():
 
     if torch.cuda.is_available():
         args.opts = ["MODEL.DEVICE", "cuda"] + args.opts
+        device = "cuda"
     else:
         args.opts = ["MODEL.DEVICE", "cpu"] + args.opts
+        device = "cpu"
 
     cfg = setup_cfg(args)
 
     mask2former_predictor = DefaultPredictor(cfg)
+    mask2former_predictor.model.to(device)
+    mask2former_predictor.model.eval()
+
 
     if os.path.isdir(args.input[0]):
         input_images = glob.glob(os.path.expanduser(args.input[0] + '/frame_*.jpg'))
@@ -149,8 +175,8 @@ def main():
             )
 
             # save inference output
-            with open(path_inference_output, 'wb') as f:
-                pickle.dump(predictions["panoptic_seg"], f)
+            with open(output_image_path + '.pkl', 'wb') as f:
+                pickle.dump((predictions["panoptic_seg"][0].to(torch.device("cpu")), predictions["panoptic_seg"][1]), f)
             
             # save image info
             image_data = json.load(open(image_info_path, 'r'))
@@ -163,7 +189,7 @@ def main():
                 continue
             image_data_relevant = {key: image_data[key] for key in ['cameraPoseARFrame', 'projectionMatrix']}
             with open(output_image_path + '.json', 'w') as f:
-                json.dump(image_data_relevant, f, indent=1) 
+                json.dump(image_data_relevant, f)
     
             if save_visualization and not os.path.exists(output_image_path + '.jpg'):
                 assert "panoptic_seg" in predictions
@@ -177,8 +203,7 @@ def main():
             
             # load json file
             image_info = json.load(open(image_info_path, 'r'))
-
-
+            
         else:
             logger.info(
                 "{}: found pre-processed, skipping".format(
@@ -189,18 +214,11 @@ def main():
         # if everything is successful, add the path to the list of processed images
         processed_image_paths.append(output_image_path)
         
-        # predictions.keys() = dict_keys(['sem_seg', 'panoptic_seg', 'instances'])
-        # type(predictions("instances")) = detectron2.structures.instances.Instances
-        # debug predictions["panoptic_seg"][0]: cv2.imwrite(os.path.join(os.getcwd(), 'output', 'debug{}.png'.format(path.split('/')[-1].replace('.jpg', ''))), 100 * predictions["panoptic_seg"][0].cpu().numpy().astype(np.uint8))
-        # debug predictions["sem_seg"]: cv2.imwrite(os.path.join(os.getcwd(), 'output', 'debug{}.png'.format(path.split('/')[-1].replace('.jpg', ''))), 100 * predictions["sem_seg"][0].cpu().numpy().astype(np.uint8))
-        
-    # project 3d point cloud into each 2d image and record the panoptic segmentation onto the 3d point cloud
-
-    # load the 3d point cloud
-    mesh_vertices = np.array(trimesh.load(os.path.join(args.input[0], 'export_refined.obj')).vertices)
+            
+    mesh_vertices = np.array(trimesh.load_mesh(os.path.join(args.input[0], 'export_refined.obj')).vertices)
 
     for path in processed_image_paths:
-        # load the 2d image
+        # load the 2d image and map to device
         panoptic_seg, segments_info = pickle.load(open(path + '.pkl', 'rb'))
         image_data = json.load(open(path + '.json', 'r'))
         image = cv2.imread(path + '.jpg')
@@ -224,22 +242,32 @@ def main():
         
         # project the 3d point cloud
         projections = project_point_mvp(mesh_vertices, mvp, image.shape[1], image.shape[0])
+        rotation_matrix = np.array([[0, -1],[1, 0]])
+        #projections = np.dot(projections, rotation_matrix.T)
+        #projections = project(mesh_vertices, pose, projection_matrix, image.shape[1], image.shape[0])
         # projections = projections.astype(int)
         # filter out points that are outside the image
         #projections = projections[(projections[:,0] >= 0) & (projections[:,0] < image.shape[1]) & (projections[:,1] >= 0) & (projections[:,1] < image.shape[0])]
 
         if DEBUG_:
+            print("----------------------------------------------------------")
+            print("current image path = ", path)
             print("projections.shape = ", projections.shape)
             print("projections = ", projections)
+            print("cameraPoseARFrame = \n", pose)
+            print("projectionMatrix = \n", projection_matrix)
             # visualize the projections by drawing circles on the image
             # Draw the projected points
             img_projected = cv2.cvtColor(image, cv2.COLOR_RGB2BGR)
             point_number1 = 0
-            for point in projections:
+            for i, point in enumerate(projections):
                 if point[0] < 0 or point[1] < 0 or point[0] >= image.shape[1] or point[1] >= image.shape[0]:
                     continue
                 point_number1 += 1
-                cv2.circle(img_projected, tuple(point.ravel().astype(int)), 5, (255, 0, 0), -1)
+                if i == 0:
+                    cv2.circle(img_projected, tuple(point.ravel().astype(int)), 20, (0, 0, 255), -1)
+                else:
+                    cv2.circle(img_projected, tuple(point.ravel().astype(int)), 5, (255, 0, 0), -1)
 
             cv2.imwrite(path + '_projections.jpg', img_projected)
             print("point_number1 = ", point_number1)
