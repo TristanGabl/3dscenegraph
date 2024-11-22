@@ -37,6 +37,7 @@ from Mask2Former.demo.predictor import VisualizationDemo
 import torch
 
 DEBUG_ = True
+OVERWRITE_ = False
 save_visualization = True
 
 def setup_cfg(args):
@@ -147,7 +148,7 @@ def main():
 
     print("\n\n")
     processed_image_paths = [] # saved with no suffix
-    for path in tqdm.tqdm(input_images, disable=not args.output):
+    for path in tqdm.tqdm(input_images):
         image = read_image(path, format="BGR") # use BGR format for OpenCV compatibility (not really used here)
         start_time = time.time()
 
@@ -155,7 +156,7 @@ def main():
         path_inference_output = output_image_path + '.pkl'
         image_info_path = path.removesuffix('.jpg') + '.json'
 
-        if not os.path.exists(path_inference_output):
+        if not os.path.exists(path_inference_output) or OVERWRITE_:
             os.makedirs(os.path.dirname(path_inference_output), exist_ok=True)
 
             # run inference
@@ -214,27 +215,16 @@ def main():
         # if everything is successful, add the path to the list of processed images
         processed_image_paths.append(output_image_path)
         
-            
+    # load the mesh vertices
     mesh_vertices = np.array(trimesh.load_mesh(os.path.join(args.input[0], 'export_refined.obj')).vertices)
-
-    for path in processed_image_paths:
-        # load the 2d image and map to device
+    for path in tqdm.tqdm(processed_image_paths):
+    
+        # load from saved files
         panoptic_seg, segments_info = pickle.load(open(path + '.pkl', 'rb'))
         image_data = json.load(open(path + '.json', 'r'))
         image = cv2.imread(path + '.jpg')
-    
-        if DEBUG_:
-            print("image.shape = ", image.shape)
-            print("panoptic_seg.shape = ", panoptic_seg.shape)
-            print("len(np.unique(panoptic_seg))-1 = ", len(np.unique(panoptic_seg))-1)
-            print("len(segments_info) = ", len(segments_info))
-            print("segments_info: ", segments_info)
 
-
-        # Load the 3d point cloud
-        # Load the panoptic segmentation
-        # Project the panoptic segmentation onto the 3d point cloud
-        # Save the 3d point cloud with the panoptic segmentation
+        # compute the model view projection matrix
         pose = np.array(image_data['cameraPoseARFrame']).reshape((4, 4))
         projection_matrix = np.array(image_data['projectionMatrix']).reshape((4, 4))
         view_matrix = np.linalg.inv(pose)
@@ -242,14 +232,8 @@ def main():
         
         # project the 3d point cloud
         projections = project_point_mvp(mesh_vertices, mvp, image.shape[1], image.shape[0])
-        rotation_matrix = np.array([[0, -1],[1, 0]])
-        #projections = np.dot(projections, rotation_matrix.T)
-        #projections = project(mesh_vertices, pose, projection_matrix, image.shape[1], image.shape[0])
-        # projections = projections.astype(int)
-        # filter out points that are outside the image
-        #projections = projections[(projections[:,0] >= 0) & (projections[:,0] < image.shape[1]) & (projections[:,1] >= 0) & (projections[:,1] < image.shape[0])]
 
-        if DEBUG_:
+        if (DEBUG_ and not os.path.exists(path + '.jpg')) or OVERWRITE_:
             print("----------------------------------------------------------")
             print("current image path = ", path)
             print("projections.shape = ", projections.shape)
@@ -272,11 +256,16 @@ def main():
             cv2.imwrite(path + '_projections.jpg', img_projected)
             print("point_number1 = ", point_number1)
             print("saved projections to ", path + '_projections.jpg')
-
-
-
-
         
+        else:
+            logger.info(
+                "{}: found projected image, skipping".format(
+                    path
+                )
+            )
+        
+
+
 
 
 
