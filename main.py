@@ -22,6 +22,9 @@ import warnings
 import cv2
 import numpy as np
 import tqdm
+import torch
+import matplotlib.pyplot as plt
+from mpl_toolkits.mplot3d import Axes3D
 
 from detectron2.config import get_cfg
 from detectron2.data.detection_utils import read_image
@@ -34,12 +37,13 @@ from detectron2.utils.visualizer import ColorMode, Visualizer
 
 from mask2former import add_maskformer2_config 
 from Mask2Former.demo.predictor import VisualizationDemo
-import torch
+
 
 DEBUG_ = True
 save_visualization = True
-OVERWRITE_0 = False
-OVERWRITE_1 = False
+OVERWRITE_0 = True
+OVERWRITE_1 = True
+OVERWRITE_2 = True
 
 def setup_cfg(args):
     # load config from file and command-line arguments
@@ -100,15 +104,6 @@ def project_point_mvp(p_in, mvp, image_width, image_height):
     projections[:,1] = (1.0 - (0.5 + (pos_y) * 0.5)) * image_height
     return projections
 
-def fuse_votes(votes):
-    unique, counts = np.unique(votes, return_counts=True)
-    # Exclude votes that are zero
-    non_zero_mask = unique != 0
-    if not np.any(non_zero_mask):
-        return 0
-    unique_non_zero = unique[non_zero_mask]
-    counts_non_zero = counts[non_zero_mask]
-    return unique_non_zero[np.argmax(counts_non_zero)].astype(int)
 
 def main():
     mp.set_start_method("spawn", force=True)
@@ -246,43 +241,58 @@ def main():
             )
         
         # we use panoptic_seg to get votes for object classes for each 3d point
-        mesh_vertices_classes_local = np.zeros((projections_filtered.shape[0], 0))
-        classes_local = np.array([segment_info['category_id'] for segment_info in segments_info])
+        classes_local_id = np.array([segment_info['id'] for segment_info in segments_info])
+        mesh_vertices_classes_local = np.zeros((projections_filtered.shape[0], len(classes_local_id)))
         for segment_info in segments_info:
             mask = panoptic_seg == segment_info["id"]
             if mask.sum() == 0:
                 continue
             mask = mask[projections_filtered[:, 1], projections_filtered[:, 0]]
             mesh_vertices_votes[filtered_indices, np.where(classes == segment_info["category_id"])[0][0]] += mask.numpy()
+            mesh_vertices_classes_local[:, segment_info["id"]-1] = mask.numpy()
 
          
-        # fuse votes to the vote that is most frequent except for 0
-        mesh_vertices_classes_local = np.apply_along_axis(fuse_votes, 1, mesh_vertices_classes_local)
+        # fuse votes to the vote that is most frequent except for 0 (local)
+        mesh_vertices_classes_local = np.apply_along_axis(lambda row: classes_local_id[np.argmax(row)] if np.any(row) else -1, 1, mesh_vertices_classes_local)
         
         # for debugging point classes
-        # if DEBUG_:
-        #     number_of_classes = len(np.unique(mesh_vertices_classes_local))
-        #     number_of_class_points = np.sum(mesh_vertices_classes_local != 0)
-        #     logger.info("number_of_classes: {}".format(number_of_classes))
-        #     logger.info("number_of_class_points: {}".format(number_of_class_points))
-        #     if save_visualization and not os.path.exists(path + '_fused_votes.jpg') or OVERWRITE_1:
-        #         img_fused_votes = cv2.cvtColor(image, cv2.COLOR_RGB2BGR)
-        #         # add grey border around the image for debugging
-        #         border_offset = 50
-        #         img_fused_votes = cv2.copyMakeBorder(img_fused_votes, border_offset, border_offset, border_offset, border_offset, cv2.BORDER_CONSTANT, value=[128, 128, 128])
-        #         for i, point in enumerate(projections_filtered):
-        #             cv2.circle(img_fused_votes, tuple(point.ravel().astype(int) + border_offset), 5, (0, 0, 0 if mesh_vertices_classes_local[i] == 0 else 255), -1)
-        #         cv2.imwrite(path + '_fused_votes.jpg', img_fused_votes)
-        #         logger.info("saved fused votes to {}_fused_votes.jpg".format(path))
+        if DEBUG_:
+            number_of_classes = len(classes_local_id)
+            number_of_class_points = np.sum(mesh_vertices_classes_local != 0)
+            logger.info("number_of_classes: {}".format(number_of_classes))
+            logger.info("number_of_class_points: {}".format(number_of_class_points))
+            if save_visualization and not os.path.exists(path + '_fused_votes.jpg') or OVERWRITE_2:
+                img_fused_votes = cv2.cvtColor(image, cv2.COLOR_RGB2BGR)
     
-    # majority voting for each 3d point
+                # add grey border around the image for debugging
+                border_offset = 50
+                img_fused_votes = cv2.copyMakeBorder(img_fused_votes, border_offset, border_offset, border_offset, border_offset, cv2.BORDER_CONSTANT, value=[128, 128, 128])
+
+                # Color points: color each class a different color, no class is black
+                # Define a colormap for the classes
+                colors = np.zeros((len(projections_filtered), 3))
+                colormap = plt.cm.get_cmap("tab10", np.max(classes_local_id) + 1)
+
+                # Map each class to a color
+                for i, class_id in enumerate(classes_local_id):
+                    if class_id == -1:
+                        colors[mesh_vertices_classes_local == class_id] = (0, 0, 0)
+                    else:
+                        colors[mesh_vertices_classes_local == class_id] = colormap(class_id)[:3]
+                
+                for i, point in enumerate(projections_filtered):
+                    cv2.circle(img_fused_votes, tuple(point.ravel().astype(int) + border_offset), 4, (colors[i] * 255), -1)
+
+                cv2.imwrite(path + '_fused_votes.jpg', img_fused_votes)
+                logger.info("saved fused votes to {}_fused_votes.jpg".format(path))
+
+    
+    # fuse votes to the vote that is most frequent except for 0 (global)
     mesh_vertices_classes = np.apply_along_axis(lambda row: classes[np.argmax(row)] if np.any(row) else -1, 1, mesh_vertices_votes)
 
     # plot pointcloud with classes for debugging
     if DEBUG_:
         if (save_visualization and not os.path.exists(args.output + '/pointcloud_classes.jpg')) or OVERWRITE_1:
-            import matplotlib.pyplot as plt
-            from mpl_toolkits.mplot3d import Axes3D
             fig = plt.figure()
             ax = fig.add_subplot(111, projection='3d')
             ax.scatter(mesh_vertices[:, 0], mesh_vertices[:, 1], mesh_vertices[:, 2], c=mesh_vertices_classes, cmap='tab20')
@@ -292,7 +302,7 @@ def main():
             np.save(args.output + '/' + args.input[0].split('/')[-1] + '/pointcloud_classes.npy', mesh_vertices_classes)
     
             
-
+# try to run demo on daniel_example_scan to debug shutdown error
 
 
 
