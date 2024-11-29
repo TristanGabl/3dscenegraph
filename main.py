@@ -37,8 +37,9 @@ from Mask2Former.demo.predictor import VisualizationDemo
 import torch
 
 DEBUG_ = True
-OVERWRITE_ = False
 save_visualization = True
+OVERWRITE_0 = False
+OVERWRITE_1 = False
 
 def setup_cfg(args):
     # load config from file and command-line arguments
@@ -99,26 +100,15 @@ def project_point_mvp(p_in, mvp, image_width, image_height):
     projections[:,1] = (1.0 - (0.5 + (pos_y) * 0.5)) * image_height
     return projections
 
-
-def project(vertices, cameraPoseARFrame, projectionMatrix, image_width, image_height):
-    # Ensure vertices are in homogeneous coordinates (x, y, z, 1)
-    vertices_homogeneous = np.hstack((vertices, np.ones((vertices.shape[0], 1))))
-
-    # Step 1: Apply the camera pose (cameraPoseARFrame) to the vertices
-    vertices_camera_space = (cameraPoseARFrame @ vertices_homogeneous.T).T
-
-    # Step 2: Apply the projection matrix
-    projected_vertices_homogeneous = (projectionMatrix @ vertices_camera_space.T).T
-
-    # Step 3: Convert from homogeneous coordinates to 2D by dividing by w
-    projected_vertices = projected_vertices_homogeneous[:, :2] / projected_vertices_homogeneous[:, 3][:, np.newaxis]
-
-    # Step 4: Rescale to pixel coordinates based on image dimensions
-    x_pixel = (projected_vertices[:, 1] + 1) / 2 * image_width  # Map from [-1, 1] to [0, width]
-    y_pixel = (1 - (projected_vertices[:, 0] + 1) / 2) * image_height  # Invert y-axis and map to [0, height]
-
-    return np.vstack((x_pixel, y_pixel)).T
-
+def fuse_votes(votes):
+    unique, counts = np.unique(votes, return_counts=True)
+    # Exclude votes that are zero
+    non_zero_mask = unique != 0
+    if not np.any(non_zero_mask):
+        return 0
+    unique_non_zero = unique[non_zero_mask]
+    counts_non_zero = counts[non_zero_mask]
+    return unique_non_zero[np.argmax(counts_non_zero)].astype(int)
 
 def main():
     mp.set_start_method("spawn", force=True)
@@ -149,6 +139,7 @@ def main():
     print("\n\n")
     processed_image_paths = [] # saved with no suffix
     for path in tqdm.tqdm(input_images):
+        print()
         image = read_image(path, format="BGR") # use BGR format for OpenCV compatibility (not really used here)
         start_time = time.time()
 
@@ -156,7 +147,7 @@ def main():
         path_inference_output = output_image_path + '.pkl'
         image_info_path = path.removesuffix('.jpg') + '.json'
 
-        if not os.path.exists(path_inference_output) or OVERWRITE_:
+        if not os.path.exists(path_inference_output) or OVERWRITE_0:
             os.makedirs(os.path.dirname(path_inference_output), exist_ok=True)
 
             # run inference
@@ -182,11 +173,7 @@ def main():
             # save image info
             image_data = json.load(open(image_info_path, 'r'))
             if image_data['cameraPoseARFrame'] is None or image_data['projectionMatrix'] is None:
-                logger.error(
-                    "{}: cameraPoseARFrame or projectionMatrix not found in image info json file".format(
-                        path
-                    )
-                )
+                logger.error("{}: cameraPoseARFrame or projectionMatrix not found in image info json file".format(path))
                 continue
             image_data_relevant = {key: image_data[key] for key in ['cameraPoseARFrame', 'projectionMatrix']}
             with open(output_image_path + '.json', 'w') as f:
@@ -202,23 +189,23 @@ def main():
                 vis_output = visualizer.draw_panoptic_seg_predictions(panoptic_seg.to(torch.device("cpu")), segments_info)
                 vis_output.save(output_image_path + '.jpg')
             
-            # load json file
-            image_info = json.load(open(image_info_path, 'r'))
             
         else:
-            logger.info(
-                "{}: found pre-processed, skipping".format(
-                    path
-                )
-            )
+            logger.info("{}: found pre-processed, skipping".format(path))
 
         # if everything is successful, add the path to the list of processed images
         processed_image_paths.append(output_image_path)
         
+    logger.info("Finished panoptic segmentation inference\n") # -----------------------------------------------
+
+    # get all classes in advance
+    classes = np.unique([segment_info['category_id'] for path in processed_image_paths for segment_info in pickle.load(open(path + '.pkl', 'rb'))[1]])
+
     # load the mesh vertices
     mesh_vertices = np.array(trimesh.load_mesh(os.path.join(args.input[0], 'export_refined.obj')).vertices)
+    mesh_vertices_votes = np.zeros((mesh_vertices.shape[0], len(classes)), dtype=int)
     for path in tqdm.tqdm(processed_image_paths):
-    
+        print()
         # load from saved files
         panoptic_seg, segments_info = pickle.load(open(path + '.pkl', 'rb'))
         image_data = json.load(open(path + '.json', 'r'))
@@ -230,40 +217,81 @@ def main():
         view_matrix = np.linalg.inv(pose)
         mvp = np.dot(projection_matrix, view_matrix)
         
-        # project the 3d point cloud
+        # project the 3d point cloud and filter out points that are not in the image
         projections = project_point_mvp(mesh_vertices, mvp, image.shape[1], image.shape[0])
+        projections = np.round(projections).astype(int) # round to nearest pixel
+        filtered_indices = (projections[:, 0] >= 0) & (projections[:, 0] < image.shape[1]) & (projections[:, 1] >= 0) & (projections[:, 1] < image.shape[0])
+        projections_filtered = projections[filtered_indices]
 
-        if (DEBUG_ and not os.path.exists(path + '.jpg')) or OVERWRITE_:
-            print("----------------------------------------------------------")
-            print("current image path = ", path)
-            print("projections.shape = ", projections.shape)
-            print("projections = ", projections)
-            print("cameraPoseARFrame = \n", pose)
-            print("projectionMatrix = \n", projection_matrix)
-            # visualize the projections by drawing circles on the image
-            # Draw the projected points
-            img_projected = cv2.cvtColor(image, cv2.COLOR_RGB2BGR)
-            point_number1 = 0
-            for i, point in enumerate(projections):
-                if point[0] < 0 or point[1] < 0 or point[0] >= image.shape[1] or point[1] >= image.shape[0]:
-                    continue
-                point_number1 += 1
-                if i == 0:
-                    cv2.circle(img_projected, tuple(point.ravel().astype(int)), 20, (0, 0, 255), -1)
-                else:
-                    cv2.circle(img_projected, tuple(point.ravel().astype(int)), 5, (255, 0, 0), -1)
+        # for debugging projected points
+        if DEBUG_:
+            number_points_projected_filtered = len(projections_filtered)
+            logger.info("number_points_projected: {}".format(number_points_projected_filtered))
+            if save_visualization and not os.path.exists(path + '_projections.jpg') or OVERWRITE_1:
+                img_projected = cv2.cvtColor(image, cv2.COLOR_RGB2BGR)
+                # add grey border around the image for debugging
+                border_offset = 50
+                img_projected = cv2.copyMakeBorder(img_projected, border_offset, border_offset, border_offset, border_offset, cv2.BORDER_CONSTANT, value=[128, 128, 128])
+                for i, point in enumerate(projections_filtered):
+                    cv2.circle(img_projected, tuple(point.ravel().astype(int) + border_offset), 5, (0, 0, 255), -1)
 
-            cv2.imwrite(path + '_projections.jpg', img_projected)
-            print("point_number1 = ", point_number1)
-            print("saved projections to ", path + '_projections.jpg')
+                cv2.imwrite(path + '_projections.jpg', img_projected) 
+                logger.info("saved projections to {}_projections.jpg".format(path))   
         
         else:
             logger.info(
-                "{}: found projected image, skipping".format(
+                "{}: found pre-processed, skipping".format(
                     path
                 )
             )
         
+        # we use panoptic_seg to get votes for object classes for each 3d point
+        mesh_vertices_classes_local = np.zeros((projections_filtered.shape[0], 0))
+        classes_local = np.array([segment_info['category_id'] for segment_info in segments_info])
+        for segment_info in segments_info:
+            mask = panoptic_seg == segment_info["id"]
+            if mask.sum() == 0:
+                continue
+            mask = mask[projections_filtered[:, 1], projections_filtered[:, 0]]
+            mesh_vertices_votes[filtered_indices, np.where(classes == segment_info["category_id"])[0][0]] += mask.numpy()
+
+         
+        # fuse votes to the vote that is most frequent except for 0
+        mesh_vertices_classes_local = np.apply_along_axis(fuse_votes, 1, mesh_vertices_classes_local)
+        
+        # for debugging point classes
+        # if DEBUG_:
+        #     number_of_classes = len(np.unique(mesh_vertices_classes_local))
+        #     number_of_class_points = np.sum(mesh_vertices_classes_local != 0)
+        #     logger.info("number_of_classes: {}".format(number_of_classes))
+        #     logger.info("number_of_class_points: {}".format(number_of_class_points))
+        #     if save_visualization and not os.path.exists(path + '_fused_votes.jpg') or OVERWRITE_1:
+        #         img_fused_votes = cv2.cvtColor(image, cv2.COLOR_RGB2BGR)
+        #         # add grey border around the image for debugging
+        #         border_offset = 50
+        #         img_fused_votes = cv2.copyMakeBorder(img_fused_votes, border_offset, border_offset, border_offset, border_offset, cv2.BORDER_CONSTANT, value=[128, 128, 128])
+        #         for i, point in enumerate(projections_filtered):
+        #             cv2.circle(img_fused_votes, tuple(point.ravel().astype(int) + border_offset), 5, (0, 0, 0 if mesh_vertices_classes_local[i] == 0 else 255), -1)
+        #         cv2.imwrite(path + '_fused_votes.jpg', img_fused_votes)
+        #         logger.info("saved fused votes to {}_fused_votes.jpg".format(path))
+    
+    # majority voting for each 3d point
+    mesh_vertices_classes = np.apply_along_axis(lambda row: classes[np.argmax(row)] if np.any(row) else -1, 1, mesh_vertices_votes)
+
+    # plot pointcloud with classes for debugging
+    if DEBUG_:
+        if (save_visualization and not os.path.exists(args.output + '/pointcloud_classes.jpg')) or OVERWRITE_1:
+            import matplotlib.pyplot as plt
+            from mpl_toolkits.mplot3d import Axes3D
+            fig = plt.figure()
+            ax = fig.add_subplot(111, projection='3d')
+            ax.scatter(mesh_vertices[:, 0], mesh_vertices[:, 1], mesh_vertices[:, 2], c=mesh_vertices_classes, cmap='tab20')
+            plt.savefig(args.output + '/' + args.input[0].split('/')[-1] + '/pointcloud_classes.jpg')
+            logger.info("saved pointcloud with classes to {}_pointcloud_classes.jpg".format(args.output))
+            # save pointcloud classes to a file
+            np.save(args.output + '/' + args.input[0].split('/')[-1] + '/pointcloud_classes.npy', mesh_vertices_classes)
+    
+            
 
 
 
