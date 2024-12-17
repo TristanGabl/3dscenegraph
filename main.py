@@ -130,7 +130,8 @@ def main():
         input_images = glob.glob(os.path.expanduser(args.input[0] + '/frame_*.jpg'))
         assert input_images, "Provided input directory does not contain any images, check if it is a directory of a scan from '3D Scanner App'"
     
-
+    input_images.sort(key=lambda x: int(x.split('_')[-1].split('.')[0]))
+    
     print("\n\n")
     processed_image_paths = [] # saved with no suffix
     for path in tqdm.tqdm(input_images):
@@ -146,7 +147,9 @@ def main():
             os.makedirs(os.path.dirname(path_inference_output), exist_ok=True)
 
             # run inference
-            predictions = mask2former_predictor(image)
+            with torch.no_grad():
+                predictions = mask2former_predictor(image)
+        
 
             # Convert image from OpenCV BGR format to Matplotlib RGB format.
             image = image[:, :, ::-1]
