@@ -24,4 +24,6 @@ def setup_logger(DEBUG_: bool = False):
     logger = logging.getLogger("colored_logger")
     logger.setLevel(logging.DEBUG)
     logger.addHandler(handler)
+    if DEBUG_:
+        logger.debug("DEBUG: True")
     return logger

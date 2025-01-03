@@ -15,16 +15,12 @@ sys.path.insert(1, '/teamspace/studios/this_studio/Mask2Former/demo')
 # change working directory to this folder 
 os.chdir('/teamspace/studios/this_studio/3dscenegraph')
 
-import tempfile
-import time
-import warnings
 
 import cv2
 import numpy as np
 import tqdm
 import torch
 import matplotlib.pyplot as plt
-from mpl_toolkits.mplot3d import Axes3D
 
 from detectron2.config import get_cfg
 from detectron2.data.detection_utils import read_image
@@ -35,7 +31,6 @@ from detectron2.engine.defaults import DefaultPredictor
 from detectron2.utils.visualizer import ColorMode, Visualizer
 
 from mask2former import add_maskformer2_config 
-from Mask2Former.demo.predictor import VisualizationDemo
 
 from setup_logger import setup_logger
 
