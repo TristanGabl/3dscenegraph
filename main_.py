@@ -33,11 +33,12 @@ from detectron2.utils.visualizer import ColorMode, Visualizer
 from scenegraph3d import SceneGraph3D
 
 
-DEBUG_ = True
+DEBUG = True
 save_visualization = True
 FORCE_MASK2FORMER = False # if True, the mask2former model will be run even if the processed images already exist
-OVERWRITE_1 = True
-OVERWRITE_2 = True
+SHORTCUT_0 = False # if True, generating frame_XXXXX_projections.jpg will be skipped
+SHORTCUT_1 = False # if True, generating frame_XXXXX_fused_votes.jpg will be skipped
+
 
 
 def get_parser():
@@ -81,25 +82,10 @@ def get_parser():
 def main():
     args = get_parser().parse_args()
 
-    pipeline = SceneGraph3D(args, DEBUG_, save_visualization, FORCE_MASK2FORMER, OVERWRITE_1, OVERWRITE_2)
+    pipeline = SceneGraph3D(args, DEBUG, save_visualization, FORCE_MASK2FORMER, SHORTCUT_0, SHORTCUT_1)
 
     pipeline.generate_3d_scene_graph()
-    
-    
-    # fuse votes to the vote that is most frequent except for 0 (global)
-    mesh_vertices_classes = np.apply_along_axis(lambda row: classes[np.argmax(row)] if np.any(row) else -1, 1, mesh_vertices_votes)
-
-    # plot pointcloud with classes for debugging, TODO: make better visualization
-    if DEBUG_:
-        if (save_visualization and not os.path.exists(args.output + '/pointcloud_classes.jpg')) or OVERWRITE_1:
-            fig = plt.figure()
-            ax = fig.add_subplot(111, projection='3d')
-            ax.scatter(mesh_vertices[:, 0], mesh_vertices[:, 1], mesh_vertices[:, 2], c=mesh_vertices_classes, cmap='tab20')
-            plt.savefig(args.output + '/' + args.input[0].split('/')[-1] + '/pointcloud_classes.jpg')
-            logger.debug("saved pointcloud with classes to {}_pointcloud_classes.jpg".format(args.output))
-            # save pointcloud classes to a file
-            np.save(args.output + '/' + args.input[0].split('/')[-1] + '/pointcloud_classes.npy', mesh_vertices_classes)
-
+    pass
 
 
 
