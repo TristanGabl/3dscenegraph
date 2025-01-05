@@ -102,7 +102,7 @@ class SceneGraph3D:
             output_image_path = os.path.join(self.output_scan_path, frame)
             inference_output_path = output_image_path + '.pkl'
 
-            image = read_image(image_path, format="RGB")
+            image = read_image(image_path, format="BGR")
 
             if not os.path.exists(inference_output_path) or self.FORCE_MASK2FORMER:
                 pbar.set_description("Running Mask2Former on image: {}".format(frame))
@@ -119,6 +119,9 @@ class SceneGraph3D:
 
                 # run inference
                 predictions = self.mask2former_predictor(image)
+
+                # BGR to RGB
+                image = image[:, :, ::-1]
 
                 # save inference output
                 with open(inference_output_path, 'wb') as f:

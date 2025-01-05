@@ -35,7 +35,7 @@ from scenegraph3d import SceneGraph3D
 
 DEBUG = True
 save_visualization = True
-FORCE_MASK2FORMER = False # if True, the mask2former model will be run even if the processed images already exist
+FORCE_MASK2FORMER = True # if True, the mask2former model will be run even if the processed images already exist
 SHORTCUT_0 = False # if True, generating frame_XXXXX_projections.jpg will be skipped
 SHORTCUT_1 = False # if True, generating frame_XXXXX_fused_votes.jpg will be skipped
 
