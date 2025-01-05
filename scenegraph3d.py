@@ -59,25 +59,29 @@ class SceneGraph3D:
 
         self.mask2former_predictor = DefaultPredictor(self.config)
         self.metadata = self.mask2former_predictor.metadata
-        self.input_image_frames, self.input_scan_path = self.generate_input_frames()
+        self.input_frames, self.input_scan_path = self.generate_input_frames()
         self.output_scan_path = os.path.join(self.args.output, self.input_scan_path.split('/')[-1])
-        self.number_input_image_paths = len(self.input_image_frames)
-        self.logger.info("Number image frames: " + str(len(self.input_image_frames)))
+        self.number_input_image_paths = len(self.input_frames)
+        self.logger.info("Number image frames: " + str(len(self.input_frames)))
+
+        # check if scan has depth images
+        if not os.path.exists(os.path.join(self.input_scan_path, 'depth_00000.png')):
+            self.logger.error("No depth images found in input directory, skipping depth map projection")
+            
     
     def generate_3d_scene_graph(self): # main function
         self.run_mask2former() # first use Mask2Former to get the panoptic segmentations
-        # get all classes 
-        self.classes = np.unique([segment_info['category_id'] for path in self.output_image_frames for segment_info in pickle.load(open(path + '.pkl', 'rb'))[1]])
-        
+        # get all classes by iterating over all segment_info dictionaries in the processed frames
+        self.classes = np.unique([segment_info['category_id'] for path in self.processed_frame_paths for segment_info in pickle.load(open(path + '.pkl', 'rb'))[1]])
+    
         # load the mesh vertices
         self.mesh_vertices = np.array(trimesh.load_mesh(os.path.join(self.input_scan_path, 'export_refined.obj')).vertices)
-        self.mesh_vertices_votes = np.zeros((self.mesh_vertices.shape[0], len(self.classes)), dtype=int)
 
         # distribute the panoptic segmentations from the images to the mesh vertices
-        self.distribute_panoptic_segmentations() 
+        self.mesh_vertices_votes_global = self.distribute_panoptic_segmentations() 
 
         # fuse votes to the vote that is most frequen (global), except for 0 
-        self.mesh_vertices_classes = np.apply_along_axis(lambda row: self.classes[np.argmax(row)] if np.any(row) else -1, 1, self.mesh_vertices_votes)
+        self.mesh_vertices_classes = np.apply_along_axis(lambda row: self.classes[np.argmax(row)] if np.any(row) else -1, 1, self.mesh_vertices_votes_global)
 
         # plot pointcloud with classes for debugging, TODO: make better visualization
         self.save_segmented_pointcloud() 
@@ -90,8 +94,8 @@ class SceneGraph3D:
             unit="images"
         )
 
-        self.output_image_frames = [] # saved with no suffix
-        for frame in self.input_image_frames:
+        self.processed_frame_paths = [] # saved with no suffix
+        for frame in self.input_frames:
             frame_path = os.path.join(self.input_scan_path, frame)
             image_path = frame_path + '.jpg'
             image_info_path = frame_path + '.json'
@@ -108,7 +112,7 @@ class SceneGraph3D:
                 if image_info['cameraPoseARFrame'] is None or image_info['projectionMatrix'] is None:
                     self.logger.warning("{}: cameraPoseARFrame or projectionMatrix not found in image info json file, skipping this image".format(frame))
                     # remove frame
-                    self.input_image_frames.remove(frame)
+                    self.input_frames.remove(frame)
                     continue
 
                 os.makedirs(self.output_scan_path, exist_ok=True)
@@ -127,12 +131,12 @@ class SceneGraph3D:
         
                 if self.SAVE_VISUALIZATION:
                     assert "panoptic_seg" in predictions
-                    panoptic_seg, segments_info = predictions["panoptic_seg"]
+                    panoptic_seg, panoptic_seg_info = predictions["panoptic_seg"]
                     visualizer = Visualizer(image, 
                                         MetadataCatalog.get(self.config.DATASETS.TEST[0] if len(self.config.DATASETS.TEST) else "__unused"), 
                                         instance_mode=ColorMode.IMAGE
                                         )
-                    vis_output = visualizer.draw_panoptic_seg_predictions(panoptic_seg.to(torch.device("cpu")), segments_info)
+                    vis_output = visualizer.draw_panoptic_seg_predictions(panoptic_seg.to(torch.device("cpu")), panoptic_seg_info)
                     vis_output.save(output_image_path + '.jpg')
                     self.logger.debug("Saved visualization to: {}".format(output_image_path + '.jpg'))
                     
@@ -141,7 +145,7 @@ class SceneGraph3D:
                 pbar.update()
 
             # if everything is successful, add the path to the list of processed images
-            self.output_image_frames.append(output_image_path)
+            self.processed_frame_paths.append(output_image_path)
         pbar.close()
             
         self.logger.info("Finished running Mask2former on images\n")
@@ -152,30 +156,25 @@ class SceneGraph3D:
             unit="images",
         )
 
+        # initialize the mesh vertices votes matrix
+        mesh_vertices_votes_global = np.zeros((self.mesh_vertices.shape[0], len(self.classes)), dtype=int)
+
         # iterate over the processed images and project the 3d points into the image and apply panoptic segmentation
-        for frame in self.output_image_frames:
+        for frame in self.processed_frame_paths:
             pbar.set_description("Projecting points into image and applying panoptic segmentation: {}".format(os.path.basename(frame)))
             
             # load from saved files
-            panoptic_seg, segments_info = pickle.load(open(frame + '.pkl', 'rb'))
+            panoptic_seg, panoptic_seg_info = pickle.load(open(frame + '.pkl', 'rb'))
             image_info = json.load(open(frame + '.json', 'r'))
+
+            # load the image and depth map
             image = cv2.imread(frame + '.jpg')
+            depth_map_path = os.path.join(self.input_scan_path, frame.split('/')[-1].replace("frame", "depth") + ".png")
+            depth_map = cv2.imread(depth_map_path, cv2.IMREAD_UNCHANGED) / 1000 # convert to meters
+            depth_map = cv2.resize(depth_map, (image.shape[1], image.shape[0]), interpolation=cv2.INTER_NEAREST) # resize to image size
 
-            # compute the model view projection matrix
-            pose = np.array(image_info['cameraPoseARFrame']).reshape((4, 4))
-            projection_matrix = np.array(image_info['projectionMatrix']).reshape((4, 4))
-            view_matrix = np.linalg.inv(pose)
-            mvp = np.dot(projection_matrix, view_matrix)
-            
-            # project the 3d point cloud and filter out points that are not in the image
-            projections = self.project_points_to_image(self.mesh_vertices, mvp, image.shape[1], image.shape[0])
-            projections_2d = np.round(projections[:,:2]).astype(int) # round to nearest pixel
-            projections[:, :2] = projections_2d # store the z coordinate
-            filtered_indices = (projections[:, 0] >= 0) & (projections[:, 0] < image.shape[1]) & (projections[:, 1] >= 0) & (projections[:, 1] < image.shape[0])
-            projections_filtered = projections[filtered_indices]
-
-            if self.DEBUG:
-                self.logger.debug("number_points_projected: {}".format(len(projections_filtered)))
+            # project the 3d point cloud into the image and filter out points that are not in the image
+            projections_filtered, projections_filtered_mask = self.project_pointcloud(image_info, image)
 
             # for debugging projected points
             if self.SAVE_VISUALIZATION and not self.SHORTCUT_0:
@@ -183,74 +182,87 @@ class SceneGraph3D:
                 # add grey border around the image for debugging
                 border_offset = 50
                 img_projected = cv2.copyMakeBorder(img_projected, border_offset, border_offset, border_offset, border_offset, cv2.BORDER_CONSTANT, value=[128, 128, 128])
-                for i, point in enumerate(projections_filtered[:,:2]):
+                for i, point in enumerate(projections_filtered[:,:2]): # leave out the depth
                     cv2.circle(img_projected, tuple(point.ravel().astype(int) + border_offset), 5, (0, 0, 255), -1)
 
                 cv2.imwrite(frame + '_projections.jpg', img_projected) 
                 self.logger.debug("saved projections to {}_projections.jpg".format(frame))
             
             # we use panoptic_seg to get votes for object classes for each 3d point
-            classes_local_id = np.array([segment_info['id'] for segment_info in segments_info])
-            mesh_vertices_classes_local = np.zeros((projections_filtered.shape[0], len(classes_local_id)))
-            depth_map = cv2.imread(os.path.join(self.args.input[0],frame.split('/')[-1]).replace("frame", "depth") + ".png", cv2.IMREAD_UNCHANGED)
-            depth_map = depth_map / 1000 # convert to meters
-            depth_map = cv2.resize(depth_map, (image.shape[1], image.shape[0]), interpolation=cv2.INTER_NEAREST) # resize to image size
+            local_class_ids = np.array([segment_info['id'] for segment_info in panoptic_seg_info])
+            # create matrix that stores the votes for each class for each filtered point
+            projections_class_votes_local = np.zeros((len(projections_filtered), len(local_class_ids)))
             # projections_filtered has shape (n, 2) where n is the number of points, depth_map has shape (h, w), i want to get the depth of each point
-            depths = depth_map[projections_filtered[:, 1].astype(int), projections_filtered[:, 0].astype(int)]
-            # compare depths with projections_filtered[:, 2] to be +- 0.05
-            depths_mask = np.zeros(len(projections), dtype=bool)
-            depths_mask[filtered_indices] = np.abs(depths - projections_filtered[:, 2]) < 0.05
-            for segment_info in segments_info:
-                mask = panoptic_seg == segment_info["id"]
-                if mask.sum() == 0:
-                    continue
-                mask = mask[projections_filtered[:, 1], projections_filtered[:, 0]]
-                mask = mask & depths_mask[filtered_indices]
-                self.mesh_vertices_votes[filtered_indices, np.where(self.classes == segment_info["category_id"])[0][0]] += mask.numpy()
-                mesh_vertices_classes_local[:, segment_info["id"]-1] = mask.numpy()
+            depth_array = depth_map[projections_filtered[:, 1].astype(int), projections_filtered[:, 0].astype(int)]
 
+            # distribute the class votes to the mesh vertices
+            projections_class_votes_local, mesh_vertices_votes_global = self.distribute_class_votes(mesh_vertices_votes_global, projections_filtered, projections_filtered_mask, panoptic_seg, panoptic_seg_info, depth_array, projections_class_votes_local)
+            
             # fuse votes to the vote that is most frequent except for 0 (local)
-            mesh_vertices_classes_local = np.apply_along_axis(lambda row: classes_local_id[np.argmax(row)] if np.any(row) else -1, 1, mesh_vertices_classes_local)
+            projections_class_votes_local = np.apply_along_axis(lambda row: local_class_ids[np.argmax(row)] if np.any(row) else -1, 1, projections_class_votes_local)
             
             # for debugging point classes
             if self.DEBUG:
-                number_of_classes = len(classes_local_id)
-                number_of_class_points = np.sum(mesh_vertices_classes_local != 0)
+                number_of_classes = len(local_class_ids)
+                number_of_class_points = np.sum(projections_class_votes_local != 0)
                 self.logger.debug("number_of_classes: {}".format(number_of_classes))
                 self.logger.debug("number_of_class_points: {}".format(number_of_class_points))
                 if self.SAVE_VISUALIZATION and not self.SHORTCUT_1:
-                    img_fused_votes = cv2.cvtColor(image, cv2.COLOR_RGB2BGR)
+                    image_fused_votes = cv2.cvtColor(image, cv2.COLOR_RGB2BGR)
         
                     # add grey border around the image for debugging
                     border_offset = 50
-                    img_fused_votes = cv2.copyMakeBorder(img_fused_votes, border_offset, border_offset, border_offset, border_offset, cv2.BORDER_CONSTANT, value=[128, 128, 128])
+                    image_fused_votes = cv2.copyMakeBorder(image_fused_votes, border_offset, border_offset, border_offset, border_offset, cv2.BORDER_CONSTANT, value=[128, 128, 128])
 
-                    # Color points: color each class a different color, no class is black
                     # Define a colormap for the classes
                     colors = np.zeros((len(projections_filtered), 3))
-                    
                     if number_of_classes > 0:
-                        colormap = plt.cm.get_cmap("tab20", np.max(classes_local_id) + 1)
+                        colormap = plt.cm.get_cmap("tab20", np.max(local_class_ids) + 1)
                     else:
                         colormap = None # no classes found
 
                     # Map each class to a color
-                    for i, class_id in enumerate(classes_local_id):
+                    for i, class_id in enumerate(local_class_ids):
                         if class_id == -1:
-                            colors[mesh_vertices_classes_local == class_id] = (0, 0, 0)
+                            colors[projections_class_votes_local == class_id] = (0, 0, 0)
                         else:
-                            colors[mesh_vertices_classes_local == class_id] = colormap(class_id)[:3]
+                            colors[projections_class_votes_local == class_id] = colormap(class_id)[:3]
                     
-                    for i, point in enumerate(projections_filtered[:,:2]):
-                        cv2.circle(img_fused_votes, tuple(point.ravel().astype(int) + border_offset), 4, (colors[i] * 255), -1)
+                    for i, point in enumerate(projections_filtered[:,:2]): # leave out the depth
+                        cv2.circle(image_fused_votes, tuple(point.ravel().astype(int) + border_offset), 4, (colors[i] * 255), -1)
 
-                    cv2.imwrite(frame + '_fused_votes.jpg', img_fused_votes)
+                    cv2.imwrite(frame + '_fused_votes.jpg', image_fused_votes)
                     self.logger.debug("saved projections with votes to {}_fused_votes.jpg".format(frame))
 
             pbar.update()
+        pbar.close()
+
+        self.logger.info("Finished distributing panoptic segmentations to mesh vertices\n")
+        return mesh_vertices_votes_global
+
+
+    def distribute_class_votes(self, mesh_vertices_votes_global, projections_filtered, projections_filtered_mask, panoptic_seg, panoptic_seg_info, depth_array, projections_class_votes_local):
+        for category_id_local, category_id_global in enumerate([seg["category_id"] for seg in panoptic_seg_info], start=1):
+            # filter out for current local category
+            mask = panoptic_seg == category_id_local 
+            if mask.sum() == 0:
+                continue
+
+            # transform to a boolean mask for the filtered points
+            mask = mask[projections_filtered[:, 1], projections_filtered[:, 0]]
+            # add criteria for depth (+-0.05 meters)
+            mask = mask & (np.abs(depth_array - projections_filtered[:, 2]) < 0.05)
+
+            # add the votes to the global mesh vertices
+            mesh_vertices_votes_global[projections_filtered_mask, np.where(self.classes == category_id_global)[0][0]] += mask.numpy()
+            # add the votes to the local mesh projections
+            projections_class_votes_local[:, category_id_local-1] = mask.numpy()
+        
+        return projections_class_votes_local, mesh_vertices_votes_global
+        
 
     
-    def project_pointcloud(self, image_info):
+    def project_pointcloud(self, image_info, image):
         # compute the model view projection matrix
         pose = np.array(image_info['cameraPoseARFrame']).reshape((4, 4))
         projection_matrix = np.array(image_info['projectionMatrix']).reshape((4, 4))
@@ -261,8 +273,14 @@ class SceneGraph3D:
         projections = self.project_points_to_image(self.mesh_vertices, mvp, image.shape[1], image.shape[0])
         projections_2d = np.round(projections[:,:2]).astype(int) # round to nearest pixel
         projections[:, :2] = projections_2d # store the z coordinate
-        filtered_indices = (projections[:, 0] >= 0) & (projections[:, 0] < image.shape[1]) & (projections[:, 1] >= 0) & (projections[:, 1] < image.shape[0])
-        projections_filtered = projections[filtered_indices]
+        projections_filtered_mask = (projections[:, 0] >= 0) & (projections[:, 0] < image.shape[1]) & (projections[:, 1] >= 0) & (projections[:, 1] < image.shape[0])
+        projections_filtered = projections[projections_filtered_mask]
+
+        if self.DEBUG:
+            self.logger.debug("number_points_projected: {}".format(len(projections_filtered)))
+        
+        return projections_filtered, projections_filtered_mask
+       
 
     def save_segmented_pointcloud(self):
         np.save(self.args.output + '/' + self.args.input[0].split('/')[-1] + '/pointcloud_classes.npy', self.mesh_vertices_classes)
@@ -273,11 +291,7 @@ class SceneGraph3D:
             ax = fig.add_subplot(111, projection='3d')
             ax.scatter(self.mesh_vertices[:, 0], self.mesh_vertices[:, 1], self.mesh_vertices[:, 2], c=self.mesh_vertices_classes, cmap='tab20')
             plt.savefig(self.args.output + '/' + self.args.input[0].split('/')[-1] + '/pointcloud_classes.jpg')
-            self.logger.debug("saved pointcloud with classes to {}_pointcloud_classes.jpg".format(self.args.output))
-        
-
-
-
+            self.logger.debug("saved pointcloud with classes to {}_pointcloud_classes.jpg".format(self.args.output))        
     
     def setup_config(self, args):
         # load config from file and command-line arguments
@@ -298,12 +312,12 @@ class SceneGraph3D:
 
         if os.path.isdir(self.args.input[0]):
             paths = sorted(glob.glob(os.path.join(self.args.input[0], 'frame_*.jpg')))
-            input_image_frames = [os.path.basename(path).removesuffix('.jpg') for path in paths]
-            assert input_image_frames, "Provided input directory does not contain any images, check if it is a directory of a scan from '3D Scanner App'"
+            input_frames = [os.path.basename(path).removesuffix('.jpg') for path in paths]
+            assert input_frames, "Provided input directory does not contain any images, check if it is a directory of a scan from '3D Scanner App'"
         else:
             raise ValueError("Given input does not exist or is not a directory")
         
-        return input_image_frames, self.args.input[0]
+        return input_frames, self.args.input[0]
 
     def project_points_to_image(self, p_in, mvp, image_width, image_height):
         p0 = np.concatenate([p_in, np.ones([p_in.shape[0], 1])], axis=1)

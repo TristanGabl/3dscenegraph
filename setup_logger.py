@@ -4,6 +4,7 @@ class CustomColorFormatter(logging.Formatter):
     COLORS = {
         "DEBUG": "\033[93m",  # Orange
         "INFO": "\033[92m",   # Green
+        "ERROR": "\033[91m",  # Red
     }
     RESET = "\033[0m"
     
