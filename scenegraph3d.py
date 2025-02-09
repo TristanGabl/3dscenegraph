@@ -60,7 +60,10 @@ class SceneGraph3D:
         self.mask2former_predictor = DefaultPredictor(self.config)
         self.metadata = self.mask2former_predictor.metadata
         self.input_frames, self.input_scan_path = self.generate_input_frames()
-        self.output_scan_path = os.path.join(self.args.output, self.input_scan_path.split('/')[-1])
+        output_scan_path = os.path.join(self.args.output, self.input_scan_path.split('/')[-1])
+        self.logger.info("Output path: " + output_scan_path)
+        self.full_output_scan_path = os.path.join(output_scan_path, 'full')
+        self.plot_output_scan_path = os.path.join(output_scan_path, 'plot')
         self.number_input_image_paths = len(self.input_frames)
         self.logger.info("Number image frames: " + str(len(self.input_frames)))
 
@@ -99,7 +102,7 @@ class SceneGraph3D:
             frame_path = os.path.join(self.input_scan_path, frame)
             image_path = frame_path + '.jpg'
             image_info_path = frame_path + '.json'
-            output_image_path = os.path.join(self.output_scan_path, frame)
+            output_image_path = os.path.join(self.full_output_scan_path, frame)
             inference_output_path = output_image_path + '.pkl'
 
             image = read_image(image_path, format="BGR")
@@ -115,7 +118,7 @@ class SceneGraph3D:
                     self.input_frames.remove(frame)
                     continue
 
-                os.makedirs(self.output_scan_path, exist_ok=True)
+                os.makedirs(self.full_output_scan_path, exist_ok=True)
 
                 # run inference
                 predictions = self.mask2former_predictor(image)
@@ -256,8 +259,10 @@ class SceneGraph3D:
             # add criteria for depth (+-0.05 meters)
             mask = mask & (np.abs(depth_array - projections_filtered[:, 2]) < 0.05)
 
-            # add the votes to the global mesh vertices
-            mesh_vertices_votes_global[projections_filtered_mask, np.where(self.classes == category_id_global)[0][0]] += mask.numpy()
+            # add the votes to the global mesh vertices according to the number of classes in the panoptic segmentation 
+            # (if there are more classes, the image has more of an overview of the scene -> better segmentation)
+            weight_factor = len(panoptic_seg_info) * len(panoptic_seg_info)
+            mesh_vertices_votes_global[projections_filtered_mask, np.where(self.classes == category_id_global)[0][0]] += mask.numpy() * weight_factor
             # add the votes to the local mesh projections
             projections_class_votes_local[:, category_id_local-1] = mask.numpy()
         
@@ -286,15 +291,27 @@ class SceneGraph3D:
        
 
     def save_segmented_pointcloud(self):
-        np.save(self.args.output + '/' + self.args.input[0].split('/')[-1] + '/pointcloud_classes.npy', self.mesh_vertices_classes)
-        self.logger.info("saved pointcloud classes to {}_pointcloud_classes.npy".format(self.args.output))
+        path_full = os.path.join(self.full_output_scan_path, self.args.input[0].split('/')[-1])
+        path_plot = os.path.join(self.plot_output_scan_path, self.args.input[0].split('/')[-1])
+        np.save(path_full + '_pointcloud_classes.npy', self.mesh_vertices_classes)
+
+        os.makedirs(self.plot_output_scan_path, exist_ok=True)
+        np.save(path_plot + '_pointcloud_classes.npy', self.mesh_vertices_classes)
+
+        self.logger.info("saved pointcloud classes")
+
+        #copy .obj file into output directories
+        os.system("cp " + os.path.join(self.input_scan_path, 'export_refined.obj') + " " + path_full + '_pointcloud_classes.obj')
+        os.system("cp " + os.path.join(self.input_scan_path, 'export_refined.obj') + " " + path_plot + '_pointcloud_classes.obj')
         
         if self.SAVE_VISUALIZATION:
-            fig = plt.figure()
-            ax = fig.add_subplot(111, projection='3d')
-            ax.scatter(self.mesh_vertices[:, 0], self.mesh_vertices[:, 1], self.mesh_vertices[:, 2], c=self.mesh_vertices_classes, cmap='tab20')
-            plt.savefig(self.args.output + '/' + self.args.input[0].split('/')[-1] + '/pointcloud_classes.jpg')
-            self.logger.debug("saved pointcloud with classes to {}_pointcloud_classes.jpg".format(self.args.output))        
+            # fig = plt.figure()
+            # ax = fig.add_subplot(111, projection='3d')
+            # ax.scatter(self.mesh_vertices[:, 0], self.mesh_vertices[:, 1], self.mesh_vertices[:, 2], c=self.mesh_vertices_classes, cmap='tab20')
+            # plt.savefig(self.args.output + '/' + self.args.input[0].split('/')[-1] + '/pointcloud_classes.jpg')
+            # self.logger.debug("saved pointcloud with classes to {}_pointcloud_classes.jpg".format(self.args.output))
+            pass
+                
     
     def setup_config(self, args):
         # load config from file and command-line arguments
