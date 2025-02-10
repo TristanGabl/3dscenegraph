@@ -25,6 +25,14 @@ def setup_logger(DEBUG_: bool = False):
     logger = logging.getLogger("colored_logger")
     logger.setLevel(logging.DEBUG)
     logger.addHandler(handler)
+
+    def important(self, message):
+        self.log(logging.INFO, "\033[95m#----\033[0m")
+        self.log(logging.INFO, f"\033[95m# {message}\033[0m")
+        self.log(logging.INFO, "\033[95m#----\033[0m")
+
+    logging.Logger.important = important
+
     if DEBUG_:
         logger.debug("DEBUG: True")
     return logger

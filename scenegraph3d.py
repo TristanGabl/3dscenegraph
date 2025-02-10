@@ -24,6 +24,7 @@ from detectron2.utils.visualizer import ColorMode, Visualizer
 from mask2former import add_maskformer2_config 
 
 from setup_logger import setup_logger
+from plot_labeled_pointcloud import plot_labeled_pointcloud
 
 
 class SceneGraph3D:
@@ -60,7 +61,8 @@ class SceneGraph3D:
         self.mask2former_predictor = DefaultPredictor(self.config)
         self.metadata = self.mask2former_predictor.metadata
         self.input_frames, self.input_scan_path = self.generate_input_frames()
-        output_scan_path = os.path.join(self.args.output, self.input_scan_path.split('/')[-1])
+        self.input_folder_name = self.input_scan_path.split('/')[-1]
+        output_scan_path = os.path.join(self.args.output, self.input_folder_name)
         self.logger.info("Output path: " + output_scan_path)
         self.full_output_scan_path = os.path.join(output_scan_path, 'full')
         self.plot_output_scan_path = os.path.join(output_scan_path, 'plot')
@@ -88,6 +90,8 @@ class SceneGraph3D:
 
         # plot pointcloud with classes for debugging, TODO: make better visualization
         self.save_segmented_pointcloud() 
+
+        # create connected graph from the mesh vertices ()
 
 
 
@@ -154,7 +158,7 @@ class SceneGraph3D:
             self.processed_frame_paths.append(output_image_path)
         pbar.close()
             
-        self.logger.info("Finished running Mask2former on images\n")
+        self.logger.important("Finished running Mask2former on images")
 
     def distribute_panoptic_segmentations(self):
         pbar = tqdm.tqdm(
@@ -243,7 +247,7 @@ class SceneGraph3D:
             pbar.update()
         pbar.close()
 
-        self.logger.info("Finished distributing panoptic segmentations to mesh vertices\n")
+        self.logger.important("Finished distributing panoptic segmentations to mesh vertices")
         return mesh_vertices_votes_global
 
 
@@ -253,7 +257,7 @@ class SceneGraph3D:
             mask = panoptic_seg == category_id_local 
             if mask.sum() == 0:
                 continue
-
+        
             # transform to a boolean mask for the filtered points
             mask = mask[projections_filtered[:, 1], projections_filtered[:, 0]]
             # add criteria for depth (+-0.05 meters)
@@ -291,26 +295,32 @@ class SceneGraph3D:
        
 
     def save_segmented_pointcloud(self):
-        path_full = os.path.join(self.full_output_scan_path, self.args.input[0].split('/')[-1])
-        path_plot = os.path.join(self.plot_output_scan_path, self.args.input[0].split('/')[-1])
+        path_full = os.path.join(self.full_output_scan_path, self.input_folder_name)
+        path_plot = os.path.join(self.plot_output_scan_path, self.input_folder_name)
         np.save(path_full + '_pointcloud_classes.npy', self.mesh_vertices_classes)
 
         os.makedirs(self.plot_output_scan_path, exist_ok=True)
         np.save(path_plot + '_pointcloud_classes.npy', self.mesh_vertices_classes)
 
-        self.logger.info("saved pointcloud classes")
+        self.logger.info("saved pointcloud_classes.npy")
 
-        #copy .obj file into output directories
+        # copy .obj file into output directories
         os.system("cp " + os.path.join(self.input_scan_path, 'export_refined.obj') + " " + path_full + '_pointcloud_classes.obj')
         os.system("cp " + os.path.join(self.input_scan_path, 'export_refined.obj') + " " + path_plot + '_pointcloud_classes.obj')
-        
+        self.logger.info("copied export_refined.obj")
+
+        # save metadata as npy file
+        # np.save(path_full + '_metadata.npy', self.metadata)
+        # np.save(path_plot + '_metadata.npy', self.metadata)
+        # self.logger.info("saved metadata.npy")
+    
         if self.SAVE_VISUALIZATION:
-            # fig = plt.figure()
-            # ax = fig.add_subplot(111, projection='3d')
-            # ax.scatter(self.mesh_vertices[:, 0], self.mesh_vertices[:, 1], self.mesh_vertices[:, 2], c=self.mesh_vertices_classes, cmap='tab20')
-            # plt.savefig(self.args.output + '/' + self.args.input[0].split('/')[-1] + '/pointcloud_classes.jpg')
-            # self.logger.debug("saved pointcloud with classes to {}_pointcloud_classes.jpg".format(self.args.output))
-            pass
+            fig = plot_labeled_pointcloud(path_plot + '_pointcloud_classes', self.metadata)
+            fig.write_html(path_plot + '_pointcloud_classes.html')
+            fig.write_html(path_full + '_pointcloud_classes.html')
+
+            self.logger.info("saved pointcloud visualization html")
+            
                 
     
     def setup_config(self, args):
