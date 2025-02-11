@@ -12,6 +12,8 @@ import numpy as np
 import tqdm
 import torch
 import matplotlib.pyplot as plt
+import networkx as nx
+import plotly.graph_objects as go
 
 from detectron2.config import get_cfg
 from detectron2.data.detection_utils import read_image
@@ -79,8 +81,9 @@ class SceneGraph3D:
         # get all classes by iterating over all segment_info dictionaries in the processed frames
         self.classes = np.unique([segment_info['category_id'] for path in self.processed_frame_paths for segment_info in pickle.load(open(path + '.pkl', 'rb'))[1]])
     
-        # load the mesh vertices
+        # load the mesh vertices and faces
         self.mesh_vertices = np.array(trimesh.load_mesh(os.path.join(self.input_scan_path, 'export_refined.obj')).vertices)
+        self.mesh_faces = np.array(trimesh.load_mesh(os.path.join(self.input_scan_path, 'export_refined.obj')).faces)
 
         # distribute the panoptic segmentations from the images to the mesh vertices
         self.mesh_vertices_votes_global = self.distribute_panoptic_segmentations() 
@@ -88,10 +91,20 @@ class SceneGraph3D:
         # fuse votes to the vote that is most frequen (global), except for 0 
         self.mesh_vertices_classes = np.apply_along_axis(lambda row: self.classes[np.argmax(row)] if np.any(row) else -1, 1, self.mesh_vertices_votes_global)
 
-        # plot pointcloud with classes for debugging, TODO: make better visualization
-        self.save_segmented_pointcloud() 
+        # extract class names and colors from metadata
+        self.id_to_class = {i: name for i, name in enumerate(self.metadata.stuff_classes)}
+        self.id_to_class_color = {i: color for i, color in enumerate(self.metadata.stuff_colors)}
 
-        # create connected graph from the mesh vertices ()
+        # create connected graph from the mesh vertices 
+        self.mesh_edges = self.create_graph_edges()
+
+        # traverse the graph to get Objects()
+        # They are of type Objects(name, index_set, center, relations)
+        self.objects = self.create_3dscenegraph_objects()
+
+        # plot pointcloud with classes for debugging
+        self.save_segmented_pointcloud()
+
 
 
 
@@ -292,7 +305,37 @@ class SceneGraph3D:
             self.logger.debug("number_points_projected: {}".format(len(projections_filtered)))
         
         return projections_filtered, projections_filtered_mask
-       
+    
+    def create_graph_edges(self):
+        edges = np.vstack([self.mesh_faces[:, [0, 1]], self.mesh_faces[:, [1, 2]], self.mesh_faces[:, [2, 0]]])
+        
+        # remove double edges and also reverse edges
+        edges = np.unique(np.sort(edges, axis=1), axis=0)
+
+        # remove edges that connect two vertices with different classes
+        edges = edges[self.mesh_vertices_classes[edges[:, 0]] == self.mesh_vertices_classes[edges[:, 1]]]
+        return edges
+    
+    def create_3dscenegraph_objects(self):
+        # Define an undirected graph and find connected components
+        G = nx.Graph()
+        G.add_edges_from(self.mesh_edges)  # Add edges to the graph, also adds the vertices
+        islands = list(nx.connected_components(G))
+
+        # remove small islands and islands corresponding to background
+        islands = [island for island in islands if np.any(self.mesh_vertices_classes[list(island)] != -1) and len(island) > 30]
+        self.logger.info("Number of objects found in Graph: {}".format(len(islands)))
+
+        # create list of Objects() from the islands
+        objects = [] 
+        for object_index_set in islands:
+            center = np.mean(self.mesh_vertices[list(object_index_set)], axis=0)
+            # use one vertex to get object name
+            object_name = self.mesh_vertices_classes[list(object_index_set)[0]]
+            
+        return objects
+
+
 
     def save_segmented_pointcloud(self):
         path_full = os.path.join(self.full_output_scan_path, self.input_folder_name)
@@ -315,9 +358,13 @@ class SceneGraph3D:
         # self.logger.info("saved metadata.npy")
     
         if self.SAVE_VISUALIZATION:
-            fig = plot_labeled_pointcloud(path_plot + '_pointcloud_classes', self.metadata)
-            fig.write_html(path_plot + '_pointcloud_classes.html')
-            fig.write_html(path_full + '_pointcloud_classes.html')
+            # Load the point cloud
+            name = path_plot + '_pointcloud_classes'
+            #if metadata is not None:
+            fig = plot_labeled_pointcloud(name, self.mesh_vertices_classes, self.mesh_vertices, self.mesh_edges, self.objects, self.id_to_class, self.id_to_class_color)
+
+            fig.write_html(name + '.html')
+            fig.write_html(name + '.html')
 
             self.logger.info("saved pointcloud visualization html")
             
@@ -361,3 +408,13 @@ class SceneGraph3D:
         projections[:, 1] = (1.0 - (0.5 + (pos_y) * 0.5)) * image_height
         projections[:, 2] = pos_z  # Store the z coordinate
         return projections
+    
+    class Objects:
+        def __init__(self, name: str, 
+                     index_set: np.ndarray = np.array([]), 
+                     center: dict = {"x": 0, "y": 0, "z": 0}, 
+                     relations: list = None):
+            self.name = name
+            self.index_set = index_set
+            self.center = center
+            self.relations = relations
