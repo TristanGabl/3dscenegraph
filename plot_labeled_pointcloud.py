@@ -37,6 +37,24 @@ def plot_labeled_pointcloud(name, ids, vertices, edges, objects, ids_to_class, i
     edge_trace.name = 'edges'
     fig.add_trace(edge_trace)
 
+    # add objects
+    for obj in objects:
+        obj_vertices = [obj.x, obj.z, obj.y]
+    
+        obj_df = pd.DataFrame(obj_vertices, columns=['x', 'z', 'y'])
+        obj_df['id'] = obj['ids']
+        obj_df['labels'] = obj_df['id'].apply(lambda x: 'unknown' if x == -1 else ids_to_class[x])
+        obj_df['color'] = obj_df['id'].apply(lambda x: 'rgb(0,0,0)' if x == -1 else f'rgb({ids_to_class_color[x][0]},{ids_to_class_color[x][1]},{ids_to_class_color[x][2]})')
+        obj_colors = {ids_to_class[i]: f'rgb({ids_to_class_color[i][0]},{ids_to_class_color[i][1]},{ids_to_class_color[i][2]})' for i, name in ids_to_class.items()}
+        obj_colors['unknown'] = 'rgb(0,0,0)'
+
+        obj_trace = px.scatter_3d(obj_df, x='x', y='y', z='z', color='labels', 
+                        color_discrete_map=obj_colors,
+                        hover_data={'x': True, 'y': True, 'z': True, 'id': True, 'labels': True, 'color': True})
+        obj_trace.update_traces(marker=dict(size=3.5))
+        fig.add_trace(obj_trace.data[0])
+
+
     fig.update_layout(title=name, legend=dict(itemsizing='constant'))  
     fig.update_scenes(aspectratio=dict(x=(df['x'].max() - df['x'].min()) / 2, 
                                     y=(df['y'].max() - df['y'].min()) / 2, 

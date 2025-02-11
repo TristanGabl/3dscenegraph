@@ -320,18 +320,20 @@ class SceneGraph3D:
         # Define an undirected graph and find connected components
         G = nx.Graph()
         G.add_edges_from(self.mesh_edges)  # Add edges to the graph, also adds the vertices
-        islands = list(nx.connected_components(G))
+        blobs = list(nx.connected_components(G))
 
-        # remove small islands and islands corresponding to background
-        islands = [island for island in islands if np.any(self.mesh_vertices_classes[list(island)] != -1) and len(island) > 30]
-        self.logger.info("Number of objects found in Graph: {}".format(len(islands)))
+        # remove small blobs and blobs corresponding to background
+        blobs = [blob for blob in blobs if np.any(self.mesh_vertices_classes[list(blob)] != -1) and len(blob) > 30]
+        self.logger.info("Number of objects found in Graph: {}".format(len(blobs)))
 
-        # create list of Objects() from the islands
+        # create list of Objects() from the blobs
         objects = [] 
-        for object_index_set in islands:
-            center = np.mean(self.mesh_vertices[list(object_index_set)], axis=0)
+        for blob in blobs:
             # use one vertex to get object name
-            object_name = self.mesh_vertices_classes[list(object_index_set)[0]]
+            object_name = self.id_to_class[self.mesh_vertices_classes[blob.pop()]]
+            center = np.mean(self.mesh_vertices[list(blob)], axis=0)
+            relations = [] # TODO: implement relations
+            objects.append(self.Objects(object_name, blob, center[0], center[1], center[2], relations))
             
         return objects
 
@@ -411,10 +413,14 @@ class SceneGraph3D:
     
     class Objects:
         def __init__(self, name: str, 
-                     index_set: np.ndarray = np.array([]), 
-                     center: dict = {"x": 0, "y": 0, "z": 0}, 
+                     index_set: np.ndarray = set(), 
+                     x: float = 0,
+                     y: float = 0,
+                     z: float = 0,
                      relations: list = None):
             self.name = name
             self.index_set = index_set
-            self.center = center
+            self.x = x
+            self.y = y
+            self.z = z
             self.relations = relations
