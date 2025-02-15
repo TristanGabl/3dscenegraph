@@ -105,7 +105,7 @@ class SceneGraph3D:
         # plot pointcloud with classes for debugging
         self.save_segmented_pointcloud()
 
-
+ 
 
 
     def run_mask2former(self):
@@ -323,17 +323,18 @@ class SceneGraph3D:
         blobs = list(nx.connected_components(G))
 
         # remove small blobs and blobs corresponding to background
-        blobs = [blob for blob in blobs if np.any(self.mesh_vertices_classes[list(blob)] != -1) and len(blob) > 30]
+        blobs = [list(blob) for blob in blobs if np.any(self.mesh_vertices_classes[list(blob)] != -1) and len(blob) > 30]
         self.logger.info("Number of objects found in Graph: {}".format(len(blobs)))
 
         # create list of Objects() from the blobs
         objects = [] 
         for blob in blobs:
             # use one vertex to get object name
-            object_name = self.id_to_class[self.mesh_vertices_classes[blob.pop()]]
-            center = np.mean(self.mesh_vertices[list(blob)], axis=0)
+            object_class = self.id_to_class[self.mesh_vertices_classes[blob[0]]]
+            class_id = self.mesh_vertices_classes[blob[0]]
+            center = np.mean(self.mesh_vertices[blob], axis=0)
             relations = [] # TODO: implement relations
-            objects.append(self.Objects(object_name, blob, center[0], center[1], center[2], relations))
+            objects.append(self.Objects(object_class, class_id, blob, center[0], center[1], center[2], relations))
             
         return objects
 
@@ -412,13 +413,16 @@ class SceneGraph3D:
         return projections
     
     class Objects:
-        def __init__(self, name: str, 
-                     index_set: np.ndarray = set(), 
+        def __init__(self,
+                     name: str,
+                     class_id: int,
+                     index_set: list,
                      x: float = 0,
                      y: float = 0,
                      z: float = 0,
                      relations: list = None):
             self.name = name
+            self.class_id = class_id
             self.index_set = index_set
             self.x = x
             self.y = y

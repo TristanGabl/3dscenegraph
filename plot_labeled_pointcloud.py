@@ -9,6 +9,12 @@ def plot_labeled_pointcloud(name, ids, vertices, edges, objects, ids_to_class, i
 
     # Invert the x-axis
     vertices[:, 0] = -vertices[:, 0]
+    for obj in objects:
+        obj.x = -obj.x
+
+    # name to color
+    dict_name_to_color = {ids_to_class[i]: f'rgb({ids_to_class_color[i][0]},{ids_to_class_color[i][1]},{ids_to_class_color[i][2]})' for i, name in ids_to_class.items()}
+    dict_name_to_color['unknown'] = 'rgb(0,0,0)'
 
     # Convert to DataFrame
     df = pd.DataFrame(vertices, columns=['x', 'z', 'y'])
@@ -16,9 +22,6 @@ def plot_labeled_pointcloud(name, ids, vertices, edges, objects, ids_to_class, i
     df['labels'] = df['id'].apply(lambda x: 'unknown' if x == -1 else ids_to_class[x])
     df['color'] = df['id'].apply(lambda x: 'rgb(0,0,0)' if x == -1 else f'rgb({ids_to_class_color[x][0]},{ids_to_class_color[x][1]},{ids_to_class_color[x][2]})')
     
-    colors = {ids_to_class[i]: f'rgb({ids_to_class_color[i][0]},{ids_to_class_color[i][1]},{ids_to_class_color[i][2]})' for i, name in ids_to_class.items()}
-    colors['unknown'] = 'rgb(0,0,0)'
-
     edge_x = []
     edge_y = []
     edge_z = []
@@ -29,31 +32,33 @@ def plot_labeled_pointcloud(name, ids, vertices, edges, objects, ids_to_class, i
         edge_y += [y0, y1, None]
         edge_z += [z0, z1, None]
 
+
     fig = px.scatter_3d(df, x='x', y='y', z='z', color='labels', 
-                        color_discrete_map=colors,
-                        hover_data={'x': True, 'y': True, 'z': True, 'id': True, 'labels': True, 'color': True})
+                        color_discrete_map=dict_name_to_color,
+                        hover_data={'x': True, 'y': True, 'z': True, 'id': True, 'labels': True, 'color': True}
+                        )
 
     edge_trace = go.Scatter3d(x=edge_x, y=edge_y, z=edge_z, mode='lines', line=dict(color='black', width=1), hoverinfo='none')
     edge_trace.name = 'edges'
     fig.add_trace(edge_trace)
 
     # add objects
-    for obj in objects:
-        obj_vertices = [obj.x, obj.z, obj.y]
+    objects_for_df = [[obj.name + '_center',
+                       obj.x, obj.y, obj.z,
+                       ] 
+                       for obj in objects]
+    obj_df = pd.DataFrame(objects_for_df, columns=['name', 'x', 'z', 'y'])
     
-        obj_df = pd.DataFrame(obj_vertices, columns=['x', 'z', 'y'])
-        obj_df['id'] = obj['ids']
-        obj_df['labels'] = obj_df['id'].apply(lambda x: 'unknown' if x == -1 else ids_to_class[x])
-        obj_df['color'] = obj_df['id'].apply(lambda x: 'rgb(0,0,0)' if x == -1 else f'rgb({ids_to_class_color[x][0]},{ids_to_class_color[x][1]},{ids_to_class_color[x][2]})')
-        obj_colors = {ids_to_class[i]: f'rgb({ids_to_class_color[i][0]},{ids_to_class_color[i][1]},{ids_to_class_color[i][2]})' for i, name in ids_to_class.items()}
-        obj_colors['unknown'] = 'rgb(0,0,0)'
+    # change the color of the objects to magenta
+    dict_name_to_magenta = {obj.name + '_center': f'rgb(255,0,255)' for obj in objects}
 
-        obj_trace = px.scatter_3d(obj_df, x='x', y='y', z='z', color='labels', 
-                        color_discrete_map=obj_colors,
-                        hover_data={'x': True, 'y': True, 'z': True, 'id': True, 'labels': True, 'color': True})
-        obj_trace.update_traces(marker=dict(size=3.5))
-        fig.add_trace(obj_trace.data[0])
-
+    obj_points = px.scatter_3d(obj_df, x='x', y='y', z='z', color='name',
+                    color_discrete_map=dict_name_to_magenta,
+                    hover_data={'x': True, 'y': True, 'z': True, 'name': True},
+                    )
+    
+    for trace in obj_points.data:
+        fig.add_trace(trace)
 
     fig.update_layout(title=name, legend=dict(itemsizing='constant'))  
     fig.update_scenes(aspectratio=dict(x=(df['x'].max() - df['x'].min()) / 2, 
@@ -69,8 +74,7 @@ def plot_labeled_pointcloud(name, ids, vertices, edges, objects, ids_to_class, i
                     )
 
     fig.update_traces(marker=dict(size=3.5))
-
-    # Add a callback or logic to adjust marker size based on camera zoom
+    
     return fig
 
 
