@@ -43,14 +43,14 @@ def plot_labeled_pointcloud(name, ids, vertices, edges, objects, ids_to_class, i
     fig.add_trace(edge_trace)
 
     # add objects
-    objects_for_df = [[obj.name + '_center',
+    objects_for_df = [[obj.name + ' center',
                        obj.x, obj.y, obj.z,
                        ] 
                        for obj in objects]
     obj_df = pd.DataFrame(objects_for_df, columns=['name', 'x', 'z', 'y'])
     
     # change the color of the objects to magenta
-    dict_name_to_magenta = {obj.name + '_center': f'rgb(255,0,255)' for obj in objects}
+    dict_name_to_magenta = {obj.name + ' center': f'rgb(255,0,255)' for obj in objects}
 
     obj_points = px.scatter_3d(obj_df, x='x', y='y', z='z', color='name',
                     color_discrete_map=dict_name_to_magenta,

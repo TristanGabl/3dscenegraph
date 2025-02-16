@@ -68,6 +68,7 @@ class SceneGraph3D:
         self.logger.info("Output path: " + output_scan_path)
         self.full_output_scan_path = os.path.join(output_scan_path, 'full')
         self.plot_output_scan_path = os.path.join(output_scan_path, 'plot')
+        self.result_output_scan_path = os.path.join(output_scan_path, 'result')
         self.number_input_image_paths = len(self.input_frames)
         self.logger.info("Number image frames: " + str(len(self.input_frames)))
 
@@ -104,6 +105,13 @@ class SceneGraph3D:
 
         # plot pointcloud with classes for debugging
         self.save_segmented_pointcloud()
+
+        # save objects into a json file
+        if not os.path.exists(self.result_output_scan_path):
+            os.makedirs(self.result_output_scan_path, exist_ok=True)
+        with open(os.path.join(self.result_output_scan_path, 'objects.json'), 'w') as f:
+            json.dump([{k: v for k, v in obj.__dict__.items() if k != 'index_set'} for obj in self.objects], f, indent=4)
+        
 
  
 
@@ -313,13 +321,15 @@ class SceneGraph3D:
         edges = np.unique(np.sort(edges, axis=1), axis=0)
 
         # remove edges that connect two vertices with different classes
-        edges = edges[self.mesh_vertices_classes[edges[:, 0]] == self.mesh_vertices_classes[edges[:, 1]]]
+        # edges = edges[self.mesh_vertices_classes[edges[:, 0]] == self.mesh_vertices_classes[edges[:, 1]]]
         return edges
     
     def create_3dscenegraph_objects(self):
         # Define an undirected graph and find connected components
         G = nx.Graph()
-        G.add_edges_from(self.mesh_edges)  # Add edges to the graph, also adds the vertices
+        # remove edges that connect two vertices with different classes
+        edges_single_classes = self.mesh_edges[self.mesh_vertices_classes[self.mesh_edges[:, 0]] == self.mesh_vertices_classes[self.mesh_edges[:, 1]]]
+        G.add_edges_from(edges_single_classes)  # Add edges to the graph, also adds the vertices
         blobs = list(nx.connected_components(G))
 
         # remove small blobs and blobs corresponding to background
@@ -331,6 +341,8 @@ class SceneGraph3D:
         for blob in blobs:
             # use one vertex to get object name
             object_class = self.id_to_class[self.mesh_vertices_classes[blob[0]]]
+            # check for duplicates
+            object_class = object_class + " " + str(len([obj for obj in objects if obj.name == object_class]) + 1)
             class_id = self.mesh_vertices_classes[blob[0]]
             center = np.mean(self.mesh_vertices[blob], axis=0)
             relations = [] # TODO: implement relations
@@ -414,17 +426,17 @@ class SceneGraph3D:
     
     class Objects:
         def __init__(self,
-                     name: str,
-                     class_id: int,
-                     index_set: list,
-                     x: float = 0,
-                     y: float = 0,
-                     z: float = 0,
-                     relations: list = None):
-            self.name = name
-            self.class_id = class_id
-            self.index_set = index_set
-            self.x = x
-            self.y = y
-            self.z = z
-            self.relations = relations
+                     name,
+                     class_id,
+                     index_set, 
+                     x, 
+                     y, 
+                     z,
+                     relations):
+            self.name = str(name)
+            self.class_id = int(class_id)
+            self.index_set = [int(i) for i in index_set]
+            self.x = float(x)
+            self.y = float(y)
+            self.z = float(z)
+            self.relations = relations if relations is not None else []
