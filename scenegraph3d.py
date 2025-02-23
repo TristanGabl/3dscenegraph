@@ -331,25 +331,44 @@ class SceneGraph3D:
         edges_single_classes = self.mesh_edges[self.mesh_vertices_classes[self.mesh_edges[:, 0]] == self.mesh_vertices_classes[self.mesh_edges[:, 1]]]
         G.add_edges_from(edges_single_classes)  # Add edges to the graph, also adds the vertices
         blobs = list(nx.connected_components(G))
+        # TODO: compute relationship of "touching" for each blob
+        # TODO: already compute spatial relations for each object
 
         # remove small blobs and blobs corresponding to background
-        blobs = [list(blob) for blob in blobs if np.any(self.mesh_vertices_classes[list(blob)] != -1) and len(blob) > 30]
+        blobs = [list(blob) for blob in blobs if np.all(self.mesh_vertices_classes[list(blob)] != -1) and len(blob) > 30]
+         
         self.logger.info("Number of objects found in Graph: {}".format(len(blobs)))
 
         # create list of Objects() from the blobs
         objects = [] 
-        for blob in blobs:
+        for i, blob in enumerate(blobs):
             # use one vertex to get object name
-            object_class = self.id_to_class[self.mesh_vertices_classes[blob[0]]]
+            object_id = i
+            object_class = self.id_to_class[self.mesh_vertices_classes[blob[0]]] + " " + str(i)
             # check for duplicates
-            object_class = object_class + " " + str(len([obj for obj in objects if obj.name == object_class]) + 1)
             class_id = self.mesh_vertices_classes[blob[0]]
             center = np.mean(self.mesh_vertices[blob], axis=0)
+            neighbors = []
             relations = [] # TODO: implement relations
-            objects.append(self.Objects(object_class, class_id, blob, center[0], center[1], center[2], relations))
+            objects.append(self.Objects(object_class, object_id, class_id, blob, center[0], center[1], center[2], neighbors, relations))
+
+        edges_boarders = self.mesh_edges[np.logical_and(self.mesh_vertices_classes[self.mesh_edges[:, 0]] != self.mesh_vertices_classes[self.mesh_edges[:, 1]], 
+                                                        np.logical_and(self.mesh_vertices_classes[self.mesh_edges[:, 0]] != -1,
+                                                                        self.mesh_vertices_classes[self.mesh_edges[:, 1]] != -1))]
+        for edge in edges_boarders:
+            object_id_0 = np.where([edge[0] in obj.index_set for obj in objects])[0]
+            object_id_1 = np.where([edge[1] in obj.index_set for obj in objects])[0]
+            if len(object_id_0) == 0 or len(object_id_1) == 0:
+                continue
+
+            object_id_0 = object_id_0[0]
+            object_id_1 = object_id_1[0]
+            if object_id_1 not in objects[object_id_0].neighbors:
+                objects[object_id_0].neighbors.append(int(object_id_1))
+            if object_id_0 not in objects[object_id_1].neighbors:
+                objects[object_id_1].neighbors.append(int(object_id_0))
             
         return objects
-
 
 
     def save_segmented_pointcloud(self):
@@ -426,17 +445,21 @@ class SceneGraph3D:
     
     class Objects:
         def __init__(self,
-                     name,
-                     class_id,
-                     index_set, 
-                     x, 
-                     y, 
-                     z,
-                     relations):
+                     name: str,
+                     object_id: int, # index in collection of objects from scene
+                     class_id: int,  # class id from metadata of Mask2Former
+                     index_set: list, 
+                     x: float,
+                     y: float, 
+                     z: float,
+                     neighbors: list = [], # set of object_ids that touch this object
+                     relations: list = []):
             self.name = str(name)
+            self.object_id = int(object_id)
             self.class_id = int(class_id)
             self.index_set = [int(i) for i in index_set]
             self.x = float(x)
             self.y = float(y)
             self.z = float(z)
-            self.relations = relations if relations is not None else []
+            self.neighbors = [int(i) for i in neighbors]
+            self.relations = [str(i) for i in relations]
