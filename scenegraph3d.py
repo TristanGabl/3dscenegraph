@@ -355,6 +355,7 @@ class SceneGraph3D:
         edges_boarders = self.mesh_edges[np.logical_and(self.mesh_vertices_classes[self.mesh_edges[:, 0]] != self.mesh_vertices_classes[self.mesh_edges[:, 1]], 
                                                         np.logical_and(self.mesh_vertices_classes[self.mesh_edges[:, 0]] != -1,
                                                                         self.mesh_vertices_classes[self.mesh_edges[:, 1]] != -1))]
+        
         for edge in edges_boarders:
             object_id_0 = np.where([edge[0] in obj.index_set for obj in objects])[0]
             object_id_1 = np.where([edge[1] in obj.index_set for obj in objects])[0]
@@ -394,8 +395,9 @@ class SceneGraph3D:
         if self.SAVE_VISUALIZATION:
             # Load the point cloud
             name = path_plot + '_pointcloud_classes'
-            #if metadata is not None:
-            fig = plot_labeled_pointcloud(name, self.mesh_vertices_classes, self.mesh_vertices, self.mesh_edges, self.objects, self.id_to_class, self.id_to_class_color)
+            
+            edges_single_classes = self.mesh_edges[self.mesh_vertices_classes[self.mesh_edges[:, 0]] == self.mesh_vertices_classes[self.mesh_edges[:, 1]]]
+            fig = plot_labeled_pointcloud(self, name, self.mesh_vertices_classes, self.mesh_vertices, edges_single_classes, self.objects, self.id_to_class, self.id_to_class_color)
 
             fig.write_html(name + '.html')
             fig.write_html(name + '.html')
