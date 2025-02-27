@@ -1,24 +1,22 @@
-from transformers import BertForQuestionAnswering, BertTokenizer
-import torch
+from ollama import chat
 import json
 
-# Load the pre-trained model and tokenizer
-model = BertForQuestionAnswering.from_pretrained("bert-large-uncased-whole-word-masking-finetuned-squad")
-tokenizer = BertTokenizer.from_pretrained("bert-large-uncased-whole-word-masking-finetuned-squad")
+def llm_response(message: str) -> str:
+    response = chat(model='gemma:2b', messages=[
+        {
+            'role': 'user',
+            'content': message,
+        },
+    ])
+    return response['message']['content']
 
-def get_answer(question, context):
-    inputs = tokenizer(question, context, return_tensors="pt")
-    with torch.no_grad():
-        outputs = model(**inputs)
-    answer_start = torch.argmax(outputs.start_logits)
-    answer_end = torch.argmax(outputs.end_logits) + 1
-    answer = tokenizer.convert_tokens_to_string(tokenizer.convert_ids_to_tokens(inputs.input_ids[0][answer_start:answer_end]))
-    return answer
+if __name__ == '__main__':
+    with open('/teamspace/studios/this_studio/3dscenegraph/output/apple_banana_scan/result/objects.json', 'r') as file:
+        context = json.load(file)
+    
+    
 
-# Example usage
-context = """
-The objects in the scene are as follows: An apple is on the table. A banana is next to the apple. The table supports both the apple and the banana.
-"""
-question = "What are possible relationships between these objects? Give a list of relationships."
-answer = get_answer(question, context)
-print(answer)
+    print(llm_response('Use the context in the following and provide a  relationship, for example "(Object1)->on top of->(Object2)", do not analyze or explain or say anything else:: Apple is neighbor to banana, banana is neighbor to apple, banana is neighbor to table, apple is neighbor to table, table is neighbor to banana, table is neighbor to apple'))
+    print(llm_response('Use the following to create a logical relationship between the two objects, for example "(Object1)->on top of->(Object2)", do not analyze or explain or say anything else:: Apple is geometrically next to table'))
+    print(llm_response('Use the following context to deduce a spacial relationship between the two objects, for example "(Object1)->*relationship*->(Object2)", do not analyze or explain or say anything else, coordinates are (x,y,z): Apple at position (0,0,0); Banana at position (0,0.1,0)'))
+
