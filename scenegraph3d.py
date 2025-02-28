@@ -27,6 +27,7 @@ from mask2former import add_maskformer2_config
 
 from setup_logger import setup_logger
 from plot_labeled_pointcloud import plot_labeled_pointcloud
+from llm_gemini import generate_edge_relationships
 
 
 class SceneGraph3D:
@@ -103,14 +104,18 @@ class SceneGraph3D:
         # They are of type Objects(name, index_set, center, relations)
         self.objects = self.create_3dscenegraph_objects()
 
-        # plot pointcloud with classes for debugging
-        self.save_segmented_pointcloud()
-
         # save objects into a json file
         if not os.path.exists(self.result_output_scan_path):
             os.makedirs(self.result_output_scan_path, exist_ok=True)
         with open(os.path.join(self.result_output_scan_path, 'objects.json'), 'w') as f:
-            json.dump([{k: v for k, v in obj.__dict__.items() if k != 'index_set'} for obj in self.objects], f, indent=4)
+            self.objects_json = [{k: v for k, v in obj.__dict__.items() if k != 'index_set'} for obj in self.objects]
+            json.dump(self.objects_json, f, indent=4)
+        
+        self.edge_relationships = generate_edge_relationships(self.objects_json)
+        
+        # plot everything
+        self.save_segmented_pointcloud()
+
         
 
  
@@ -397,7 +402,7 @@ class SceneGraph3D:
             name = path_plot + '_pointcloud_classes'
             
             edges_single_classes = self.mesh_edges[self.mesh_vertices_classes[self.mesh_edges[:, 0]] == self.mesh_vertices_classes[self.mesh_edges[:, 1]]]
-            fig = plot_labeled_pointcloud(self, name, self.mesh_vertices_classes, self.mesh_vertices, edges_single_classes, self.objects, self.id_to_class, self.id_to_class_color)
+            fig = plot_labeled_pointcloud(self, name, self.mesh_vertices_classes, self.mesh_vertices, edges_single_classes, self.edge_relationships, self.objects, self.id_to_class, self.id_to_class_color)
 
             fig.write_html(name + '.html')
             fig.write_html(name + '.html')

@@ -5,7 +5,7 @@ import plotly.graph_objects as go
 import pandas as pd
 # from matplotlib import cm
 
-def plot_labeled_pointcloud(self, name, ids, vertices, edges, objects, ids_to_class, ids_to_class_color):
+def plot_labeled_pointcloud(self, name, ids, vertices, edges, edge_relationships, objects, ids_to_class, ids_to_class_color):
 
     # Invert the x-axis and switch the y and z axes
     vertices[:, [0, 1, 2]] = vertices[:, [0, 2, 1]]
@@ -62,10 +62,11 @@ def plot_labeled_pointcloud(self, name, ids, vertices, edges, objects, ids_to_cl
         fig.add_trace(trace)
 
     
-    # add lines between neighbors' centers
+    # add relationships edges between object centers
     edge_x = []
     edge_y = []
     edge_z = []
+    relationships = []
     for obj in objects:
         for neighbor in obj.neighbors:
             x0, y0, z0 = obj.x, obj.y, obj.z
@@ -73,9 +74,14 @@ def plot_labeled_pointcloud(self, name, ids, vertices, edges, objects, ids_to_cl
             edge_x += [x0, x1, None]
             edge_y += [y0, y1, None]
             edge_z += [z0, z1, None]
+            tmp = edge_relationships[obj.object_id][objects[neighbor].object_id]
+            relationships += [tmp, tmp, tmp]
+            
     
-    edge_trace = go.Scatter3d(x=edge_x, y=edge_y, z=edge_z, mode='lines', line=dict(color='red', width=4), hoverinfo='none')
-    edge_trace.name = 'neighbors'
+
+    
+    edge_trace = go.Scatter3d(x=edge_x, y=edge_y, z=edge_z, mode='lines', line=dict(color='red', width=4), hoverinfo='text', text=relationships)
+    edge_trace.name = 'relationships'
     fig.add_trace(edge_trace)
 
 
