@@ -8,12 +8,9 @@ import trimesh
 import json
 
 import sys
-sys.path.insert(1, os.path.join(sys.path[0], '..'))
-sys.path.insert(1, '/teamspace/studios/this_studio/Mask2Former')
-sys.path.insert(1, '/teamspace/studios/this_studio/Mask2Former/demo')
-
+sys.path.insert(1, os.path.join(sys.path[0], './Mask2Former'))
 # change working directory to this folder 
-os.chdir('/teamspace/studios/this_studio/3dscenegraph')
+os.chdir('/home/tristan/3dscenegraph')
 
 
 import cv2
@@ -39,13 +36,15 @@ FORCE_MASK2FORMER = False # if True, the mask2former model will be run even if t
 SHORTCUT_0 = True # if True, generating frame_XXXXX_projections.jpg will be skipped
 SHORTCUT_1 = True # if True, generating frame_XXXXX_fused_votes.jpg will be skipped
 
+USE_LLM = False
+
 
 
 def get_parser():
     parser = argparse.ArgumentParser(description="3dscenegraph pipeline using mask2former")
     parser.add_argument(
         "--config-file",
-        default="../Mask2Former/configs/coco/panoptic-segmentation/maskformer2_R50_bs16_50ep.yaml",
+        default="Mask2Former/configs/coco/panoptic-segmentation/swin/maskformer2_swin_large_IN21k_384_bs16_100ep.yaml",
         metavar="FILE",
         help="path to config file (default set in main.py)",
     )
@@ -73,7 +72,7 @@ def get_parser():
         "--opts",
         help="Modify config options using the command-line 'KEY VALUE' pairs (default set in main.py); "
         "example: MODEL.WEIGHTS /path/to/model_checkpoint.pkkl",
-        default=["MODEL.WEIGHTS", "/teamspace/studios/this_studio/Mask2Former/model_weights/model_final_94dc52.pkl"],
+        default=["MODEL.WEIGHTS", "model_weights/model_final_f07440.pkl"],
         nargs=argparse.REMAINDER,
     )
     return parser
@@ -82,11 +81,11 @@ def get_parser():
 def main():
     args = get_parser().parse_args()
 
-    pipeline = SceneGraph3D(args, DEBUG, save_visualization, FORCE_MASK2FORMER, SHORTCUT_0, SHORTCUT_1)
+    pipeline = SceneGraph3D(args, DEBUG, save_visualization, FORCE_MASK2FORMER, SHORTCUT_0, SHORTCUT_1, USE_LLM)
 
     pipeline.generate_3d_scene_graph()
 
-
+    # TODO: remember images of objects to use create mask of object and double check non-duplicate property by running mask2former on the objectm ask again
  
 
 if __name__ == "__main__":

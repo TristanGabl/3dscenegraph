@@ -2,3 +2,8 @@ output/
 !output/.gitkeep
 test/
 __pycache__/
+/.venv
+Mask2Former/
+scans/
+model_weights/
+.vscode

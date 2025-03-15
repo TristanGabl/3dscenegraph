@@ -34,11 +34,12 @@ class SceneGraph3D:
     def __init__(
         self,
         args, 
-        DEBUG: bool = False,
-        SAVE_VISUALIZATION: bool = False,
-        FORCE_MASK2FORMER: bool = False,
-        SHORTCUT_0: bool = False,
-        SHORTCUT_1: bool = False,
+        DEBUG: bool,
+        SAVE_VISUALIZATION: bool,
+        FORCE_MASK2FORMER: bool,
+        SHORTCUT_0: bool,
+        SHORTCUT_1: bool,
+        USE_LLM: bool
     ):
         mp.set_start_method("spawn", force=True)
         self.logger = setup_logger(DEBUG)
@@ -54,7 +55,8 @@ class SceneGraph3D:
         self.logger.info("SHORTCUT_0: " + str(SHORTCUT_0))
         self.SHORTCUT_1 = SHORTCUT_1
         self.logger.info("SHORTCUT_1: " + str(SHORTCUT_1))
-
+        self.USE_LLM = USE_LLM
+        self.logger.info("USE_LLM: " + str(USE_LLM))
 
         self.device = torch.device("cuda") if torch.cuda.is_available() else torch.device("cpu")
         self.logger.info("Device: " + str(self.device))
@@ -64,7 +66,7 @@ class SceneGraph3D:
         self.mask2former_predictor = DefaultPredictor(self.config)
         self.metadata = self.mask2former_predictor.metadata
         self.input_frames, self.input_scan_path = self.generate_input_frames()
-        self.input_folder_name = self.input_scan_path.split('/')[-1]
+        self.input_folder_name = self.input_scan_path.split('/')[-2] if self.input_scan_path.endswith('/') else self.input_scan_path.split('/')[-1]
         output_scan_path = os.path.join(self.args.output, self.input_folder_name)
         self.logger.info("Output path: " + output_scan_path)
         self.full_output_scan_path = os.path.join(output_scan_path, 'full')
@@ -87,8 +89,8 @@ class SceneGraph3D:
         self.mesh_vertices = np.array(trimesh.load_mesh(os.path.join(self.input_scan_path, 'export_refined.obj')).vertices)
         self.mesh_faces = np.array(trimesh.load_mesh(os.path.join(self.input_scan_path, 'export_refined.obj')).faces)
 
-        # distribute the panoptic segmentations from the images to the mesh vertices
-        self.mesh_vertices_votes_global = self.distribute_panoptic_segmentations() 
+        # distribute the panoptic segmentations from the images to the mesh vertices and remember in which frames a vertex was observed
+        self.mesh_vertices_votes_global, self.mesh_vertices_frame_observations = self.distribute_panoptic_segmentations()
 
         # fuse votes to the vote that is most frequen (global), except for 0 
         self.mesh_vertices_classes = np.apply_along_axis(lambda row: self.classes[np.argmax(row)] if np.any(row) else -1, 1, self.mesh_vertices_votes_global)
@@ -102,7 +104,10 @@ class SceneGraph3D:
 
         # traverse the graph to get Objects()
         # They are of type Objects(name, index_set, center, relations)
-        self.objects = self.create_3dscenegraph_objects()
+        objects = self.create_3dscenegraph_objects()
+
+        # make extra check in case two same objects are next to each other
+        self.objects = self.duplicate_double_check(objects)
 
         # save objects into a json file
         if not os.path.exists(self.result_output_scan_path):
@@ -111,7 +116,7 @@ class SceneGraph3D:
             self.objects_json = [{k: v for k, v in obj.__dict__.items() if k != 'index_set'} for obj in self.objects]
             json.dump(self.objects_json, f, indent=4)
         
-        self.edge_relationships = generate_edge_relationships(self.objects_json)
+        self.edge_relationships = generate_edge_relationships(self.objects_json, self.USE_LLM)
         
         # plot everything
         self.save_segmented_pointcloud()
@@ -183,8 +188,83 @@ class SceneGraph3D:
             # if everything is successful, add the path to the list of processed images
             self.processed_frame_paths.append(output_image_path)
         pbar.close()
-            
+
         self.logger.important("Finished running Mask2former on images")
+
+    def duplicate_double_check(self, objects):
+        pbar = tqdm.tqdm(
+            total=len(objects),
+            unit="objects"
+        )
+
+        for obj in objects:
+            pbar.set_description("Checking for duplicates: {}".format(obj.name))
+            image_path = os.path.join(self.input_scan_path, obj.best_perspective_frame) + '.jpg'
+            image = read_image(image_path, format="BGR")
+            image_info_path = os.path.join(self.full_output_scan_path, obj.best_perspective_frame) + '.json'
+            image_info = json.load(open(image_info_path, 'r'))
+
+            # create mask for object
+            pose = np.array(image_info['cameraPoseARFrame']).reshape((4, 4))
+            projection_matrix = np.array(image_info['projectionMatrix']).reshape((4, 4))
+            view_matrix = np.linalg.inv(pose)
+            mvp = np.dot(projection_matrix, view_matrix)
+
+            projections = self.project_points_to_image(self.mesh_vertices[obj.index_set], mvp, image.shape[1], image.shape[0])
+            projections_2d = np.round(projections[:,:2]).astype(int) # round to nearest pixel
+            projections_2d = projections_2d[
+                (projections_2d[:, 0] >= 0) & 
+                (projections_2d[:, 0] < image.shape[1]) & 
+                (projections_2d[:, 1] >= 0) & 
+                (projections_2d[:, 1] < image.shape[0])
+            ]
+
+
+            # create mask for object
+            # mask = np.zeros(image.shape[:2], dtype=np.uint8)
+            # mask[projections_2d[:, 1], projections_2d[:, 0]] = 255
+
+            mask = np.zeros(image.shape[:2], dtype=np.uint8)
+
+            # mask[:mask.shape[0] // 2, :mask.shape[1] // 2] = 255
+
+            # create convex hull of the projections
+            hull = cv2.convexHull(projections_2d)
+            cv2.fillConvexPoly(mask, hull, 255)
+            
+            # apply mask to the image
+            masked_image = cv2.bitwise_and(image, image, mask=mask)
+
+            cropped_masked_image = masked_image[
+                np.min(projections_2d[:, 1]):np.max(projections_2d[:, 1]),
+                np.min(projections_2d[:, 0]):np.max(projections_2d[:, 0])
+            ]
+
+            # save the masked image for debugging
+
+            # run mask2former on the masked image
+            masked_predictions = self.mask2former_predictor(cropped_masked_image)
+
+            if self.SAVE_VISUALIZATION:
+                    assert "panoptic_seg" in masked_predictions
+                    save_image_path = os.path.join(self.full_output_scan_path, obj.best_perspective_frame) + '_double_check_ ' + obj.name + '.jpg'
+                    panoptic_seg, panoptic_seg_info = masked_predictions["panoptic_seg"]
+                    cropped_masked_image = cropped_masked_image[:, :, ::-1]
+                    visualizer = Visualizer(cropped_masked_image, 
+                                        MetadataCatalog.get(self.config.DATASETS.TEST[0] if len(self.config.DATASETS.TEST) else "__unused"), 
+                                        instance_mode=ColorMode.IMAGE
+                                        )
+
+                    vis_output = visualizer.draw_panoptic_seg_predictions(panoptic_seg.to(torch.device("cpu")), panoptic_seg_info)
+                    vis_output.save(save_image_path)
+                    self.logger.debug("Saved visualization to: {}".format(save_image_path))
+            
+            pbar.update()
+
+            
+
+        return objects
+
 
     def distribute_panoptic_segmentations(self):
         pbar = tqdm.tqdm(
@@ -194,6 +274,9 @@ class SceneGraph3D:
 
         # initialize the mesh vertices votes matrix
         mesh_vertices_votes_global = np.zeros((self.mesh_vertices.shape[0], len(self.classes)), dtype=int)
+
+        # initialize vertex observations
+        mesh_vertices_frame_observations = [set() for _ in range(self.mesh_vertices.shape[0])]
 
         # iterate over the processed images and project the 3d points into the image and apply panoptic segmentation
         for frame in self.processed_frame_paths:
@@ -212,6 +295,9 @@ class SceneGraph3D:
             # project the 3d point cloud into the image and filter out points that are not in the image
             projections_filtered, projections_filtered_mask = self.project_pointcloud(image_info, image)
 
+            # remember what image a vertex was observed in
+            [mesh_vertices_frame_observations[idx].add(frame.split("/")[-1]) for idx in np.where(projections_filtered_mask)[0]]
+            
             # for debugging projected points
             if self.SAVE_VISUALIZATION and not self.SHORTCUT_0:
                 img_projected = cv2.cvtColor(image, cv2.COLOR_RGB2BGR)
@@ -274,7 +360,7 @@ class SceneGraph3D:
         pbar.close()
 
         self.logger.important("Finished distributing panoptic segmentations to mesh vertices")
-        return mesh_vertices_votes_global
+        return mesh_vertices_votes_global, mesh_vertices_frame_observations
 
 
     def distribute_class_votes(self, mesh_vertices_votes_global, projections_filtered, projections_filtered_mask, panoptic_seg, panoptic_seg_info, depth_array, projections_class_votes_local):
@@ -287,7 +373,7 @@ class SceneGraph3D:
             # transform to a boolean mask for the filtered points
             mask = mask[projections_filtered[:, 1], projections_filtered[:, 0]]
             # add criteria for depth (+-0.05 meters)
-            mask = mask & (np.abs(depth_array - projections_filtered[:, 2]) < 0.05)
+            mask = mask & (np.abs(depth_array - projections_filtered[:, 2]) < 0.03)
 
             # add the votes to the global mesh vertices according to the number of classes in the panoptic segmentation 
             # (if there are more classes, the image has more of an overview of the scene -> better segmentation)
@@ -299,7 +385,6 @@ class SceneGraph3D:
         return projections_class_votes_local, mesh_vertices_votes_global
         
 
-    
     def project_pointcloud(self, image_info, image):
         # compute the model view projection matrix
         pose = np.array(image_info['cameraPoseARFrame']).reshape((4, 4))
@@ -336,8 +421,6 @@ class SceneGraph3D:
         edges_single_classes = self.mesh_edges[self.mesh_vertices_classes[self.mesh_edges[:, 0]] == self.mesh_vertices_classes[self.mesh_edges[:, 1]]]
         G.add_edges_from(edges_single_classes)  # Add edges to the graph, also adds the vertices
         blobs = list(nx.connected_components(G))
-        # TODO: compute relationship of "touching" for each blob
-        # TODO: already compute spatial relations for each object
 
         # remove small blobs and blobs corresponding to background
         blobs = [list(blob) for blob in blobs if np.all(self.mesh_vertices_classes[list(blob)] != -1) and len(blob) > 30]
@@ -354,13 +437,18 @@ class SceneGraph3D:
             class_id = self.mesh_vertices_classes[blob[0]]
             center = np.mean(self.mesh_vertices[blob], axis=0)
             neighbors = []
-            relations = [] # TODO: implement relations
-            objects.append(self.Objects(object_class, object_id, class_id, blob, center[0], center[1], center[2], neighbors, relations))
+            relations = []
+
+            frames_tmp = [frame for idx in blob for frame in self.mesh_vertices_frame_observations[idx]]
+            best_perspective_frame = max(set(frames_tmp), key=frames_tmp.count)
+
+
+            objects.append(self.Objects(object_class, object_id, class_id, blob, center[0], center[1], center[2], neighbors, relations, best_perspective_frame))
+
 
         edges_boarders = self.mesh_edges[np.logical_and(self.mesh_vertices_classes[self.mesh_edges[:, 0]] != self.mesh_vertices_classes[self.mesh_edges[:, 1]], 
                                                         np.logical_and(self.mesh_vertices_classes[self.mesh_edges[:, 0]] != -1,
                                                                         self.mesh_vertices_classes[self.mesh_edges[:, 1]] != -1))]
-        
         for edge in edges_boarders:
             object_id_0 = np.where([edge[0] in obj.index_set for obj in objects])[0]
             object_id_1 = np.where([edge[1] in obj.index_set for obj in objects])[0]
@@ -431,7 +519,8 @@ class SceneGraph3D:
         if os.path.isdir(self.args.input[0]):
             paths = sorted(glob.glob(os.path.join(self.args.input[0], 'frame_*.jpg')))
             input_frames = [os.path.basename(path).removesuffix('.jpg') for path in paths]
-            assert input_frames, "Provided input directory does not contain any images, check if it is a directory of a scan from '3D Scanner App'"
+            assert input_frames, f"Provided input directory does not contain any images, check if it is a directory of a scan from '3D Scanner App', the folder only contrains: {os.listdir(self.args.input[0])}"
+            
         else:
             raise ValueError("Given input does not exist or is not a directory")
         
@@ -450,6 +539,7 @@ class SceneGraph3D:
         projections[:, 2] = pos_z  # Store the z coordinate
         return projections
     
+    
     class Objects:
         def __init__(self,
                      name: str,
@@ -460,7 +550,8 @@ class SceneGraph3D:
                      y: float, 
                      z: float,
                      neighbors: list = [], # set of object_ids that touch this object
-                     relations: list = []):
+                     relations: list = [],
+                     best_perspective_frame: list = None):
             self.name = str(name)
             self.object_id = int(object_id)
             self.class_id = int(class_id)
@@ -470,3 +561,4 @@ class SceneGraph3D:
             self.z = float(z)
             self.neighbors = [int(i) for i in neighbors]
             self.relations = [str(i) for i in relations]
+            self.best_perspective_frame = best_perspective_frame if best_perspective_frame is not None else None
