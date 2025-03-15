@@ -29,6 +29,7 @@ from setup_logger import setup_logger
 from plot_labeled_pointcloud import plot_labeled_pointcloud
 from llm_gemini import generate_edge_relationships
 
+from open_clip_ import compute_similarity
 
 class SceneGraph3D:
     def __init__(
@@ -198,6 +199,10 @@ class SceneGraph3D:
         )
 
         for obj in objects:
+            if any(keyword in obj.name.lower().replace('-', ' ').split() for keyword in ["floor", "wall"]):
+                print("Skipping floor or wall")
+                pbar.update()
+                continue
             pbar.set_description("Checking for duplicates: {}".format(obj.name))
             image_path = os.path.join(self.input_scan_path, obj.best_perspective_frame) + '.jpg'
             image = read_image(image_path, format="BGR")
@@ -240,24 +245,33 @@ class SceneGraph3D:
                 np.min(projections_2d[:, 0]):np.max(projections_2d[:, 0])
             ]
 
+
+
             # save the masked image for debugging
 
-            # run mask2former on the masked image
-            masked_predictions = self.mask2former_predictor(cropped_masked_image)
+            # # run mask2former on the masked image
+            # masked_predictions = self.mask2former_predictor(cropped_masked_image)
 
-            if self.SAVE_VISUALIZATION:
-                    assert "panoptic_seg" in masked_predictions
-                    save_image_path = os.path.join(self.full_output_scan_path, obj.best_perspective_frame) + '_double_check_ ' + obj.name + '.jpg'
-                    panoptic_seg, panoptic_seg_info = masked_predictions["panoptic_seg"]
-                    cropped_masked_image = cropped_masked_image[:, :, ::-1]
-                    visualizer = Visualizer(cropped_masked_image, 
-                                        MetadataCatalog.get(self.config.DATASETS.TEST[0] if len(self.config.DATASETS.TEST) else "__unused"), 
-                                        instance_mode=ColorMode.IMAGE
-                                        )
+            # if self.SAVE_VISUALIZATION:
+            #         assert "panoptic_seg" in masked_predictions
+            #         save_image_path = os.path.join(self.full_output_scan_path, obj.best_perspective_frame) + '_double_check_ ' + obj.name + '.jpg'
+            #         panoptic_seg, panoptic_seg_info = masked_predictions["panoptic_seg"]
+            #         cropped_masked_image = cropped_masked_image[:, :, ::-1]
+            #         visualizer = Visualizer(cropped_masked_image, 
+            #                             MetadataCatalog.get(self.config.DATASETS.TEST[0] if len(self.config.DATASETS.TEST) else "__unused"), 
+            #                             instance_mode=ColorMode.IMAGE
+            #                             )
 
-                    vis_output = visualizer.draw_panoptic_seg_predictions(panoptic_seg.to(torch.device("cpu")), panoptic_seg_info)
-                    vis_output.save(save_image_path)
-                    self.logger.debug("Saved visualization to: {}".format(save_image_path))
+            #         vis_output = visualizer.draw_panoptic_seg_predictions(panoptic_seg.to(torch.device("cpu")), panoptic_seg_info)
+            #         vis_output.save(save_image_path)
+            #         self.logger.debug("Saved visualization to: {}".format(save_image_path))
+
+
+            # compute similarity between the masked image and the original image
+            save_image_path = os.path.join(self.full_output_scan_path, obj.best_perspective_frame) + '_double_check_ ' + obj.name + '.jpg'
+            cv2.imwrite(save_image_path, cropped_masked_image)
+            similarity = compute_similarity(save_image_path, obj.name)
+            self.logger.debug("Similarity score for {} in image {}: {}".format(obj.name, obj.best_perspective_frame, similarity))
             
             pbar.update()
 
