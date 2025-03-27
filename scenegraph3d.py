@@ -123,10 +123,6 @@ class SceneGraph3D:
         self.save_segmented_pointcloud()
 
         
-
- 
-
-
     def run_mask2former(self):
         pbar = tqdm.tqdm(
             total=self.number_input_image_paths,
@@ -204,6 +200,7 @@ class SceneGraph3D:
                 pbar.update()
                 continue
             pbar.set_description("Checking for duplicates: {}".format(obj.name))
+            pbar.update()
             image_path = os.path.join(self.input_scan_path, obj.best_perspective_frame) + '.jpg'
             image = read_image(image_path, format="BGR")
             image_info_path = os.path.join(self.full_output_scan_path, obj.best_perspective_frame) + '.json'
@@ -246,37 +243,20 @@ class SceneGraph3D:
             ]
 
 
-
-            # save the masked image for debugging
-
-            # # run mask2former on the masked image
-            # masked_predictions = self.mask2former_predictor(cropped_masked_image)
-
-            # if self.SAVE_VISUALIZATION:
-            #         assert "panoptic_seg" in masked_predictions
-            #         save_image_path = os.path.join(self.full_output_scan_path, obj.best_perspective_frame) + '_double_check_ ' + obj.name + '.jpg'
-            #         panoptic_seg, panoptic_seg_info = masked_predictions["panoptic_seg"]
-            #         cropped_masked_image = cropped_masked_image[:, :, ::-1]
-            #         visualizer = Visualizer(cropped_masked_image, 
-            #                             MetadataCatalog.get(self.config.DATASETS.TEST[0] if len(self.config.DATASETS.TEST) else "__unused"), 
-            #                             instance_mode=ColorMode.IMAGE
-            #                             )
-
-            #         vis_output = visualizer.draw_panoptic_seg_predictions(panoptic_seg.to(torch.device("cpu")), panoptic_seg_info)
-            #         vis_output.save(save_image_path)
-            #         self.logger.debug("Saved visualization to: {}".format(save_image_path))
-
-
             # compute similarity between the masked image and the original image
             save_image_path = os.path.join(self.full_output_scan_path, obj.best_perspective_frame) + '_double_check_ ' + obj.name + '.jpg'
             cv2.imwrite(save_image_path, cropped_masked_image)
-            similarity = compute_similarity(save_image_path, obj.name)
-            self.logger.debug("Similarity score for {} in image {}: {}".format(obj.name, obj.best_perspective_frame, similarity))
-            
-            pbar.update()
-
-            
-
+            obj_name_no_numbers = ''.join([char for char in obj.name if not char.isdigit()])
+            similarity_1 = compute_similarity(save_image_path, "There is only one " + obj_name_no_numbers)
+            similarity_2 = compute_similarity(save_image_path, "There are multiple " + obj_name_no_numbers)
+            if similarity_1 > similarity_2:
+                obj.name = "One " + obj_name_no_numbers
+            else:
+                obj.name = "Multiple " + obj_name_no_numbers
+            self.logger.debug("Similarity for one {}: {}".format(obj_name_no_numbers, similarity_1))
+            self.logger.debug("Similarity for multiple {}: {}".format(obj_name_no_numbers, similarity_2))
+        
+        pbar.close()
         return objects
 
 
@@ -387,7 +367,7 @@ class SceneGraph3D:
             # transform to a boolean mask for the filtered points
             mask = mask[projections_filtered[:, 1], projections_filtered[:, 0]]
             # add criteria for depth (+-0.05 meters)
-            mask = mask & (np.abs(depth_array - projections_filtered[:, 2]) < 0.03)
+            mask = mask & (np.abs(depth_array - projections_filtered[:, 2]) < 0.05)
 
             # add the votes to the global mesh vertices according to the number of classes in the panoptic segmentation 
             # (if there are more classes, the image has more of an overview of the scene -> better segmentation)

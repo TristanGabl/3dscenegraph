@@ -27,8 +27,9 @@ def compute_similarity(image_path, text_context):
         # Compute cosine similarity directly
         similarity = (image_features @ text_features.T).squeeze()
 
+
     # Print similarity score
-    print(f"Cosine similarity for '{text_context}': {similarity.item():.2f}")
+    #print(f"Cosine similarity for '{text_context}': {similarity.item():.2f}")
 
     if __name__ == "__main__":
         # Visualize image with similarity score
@@ -39,6 +40,8 @@ def compute_similarity(image_path, text_context):
 
         # Show the image and similarity
         plt.show()
+    
+    return similarity.item()
 
 if __name__ == "__main__":
     image_path = "frame_00013.jpg"
