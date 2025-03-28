@@ -30,6 +30,7 @@ from plot_labeled_pointcloud import plot_labeled_pointcloud
 from llm_gemini import generate_edge_relationships
 
 from open_clip_ import compute_similarity
+from find_clusters import find_best_kmeans_clusters
 
 class SceneGraph3D:
     def __init__(
@@ -73,6 +74,7 @@ class SceneGraph3D:
         self.full_output_scan_path = os.path.join(output_scan_path, 'full')
         self.plot_output_scan_path = os.path.join(output_scan_path, 'plot')
         self.result_output_scan_path = os.path.join(output_scan_path, 'result')
+        self.object_output_scan_path = os.path.join(output_scan_path, 'objects')
         self.number_input_image_paths = len(self.input_frames)
         self.logger.info("Number image frames: " + str(len(self.input_frames)))
 
@@ -105,7 +107,33 @@ class SceneGraph3D:
 
         # traverse the graph to get Objects()
         # They are of type Objects(name, index_set, center, relations)
+        self.edges_boarders = self.mesh_edges[np.logical_and(self.mesh_vertices_classes[self.mesh_edges[:, 0]] != self.mesh_vertices_classes[self.mesh_edges[:, 1]], 
+                                              np.logical_and(self.mesh_vertices_classes[self.mesh_edges[:, 0]] != -1, self.mesh_vertices_classes[self.mesh_edges[:, 1]] != -1))]
+        
         objects = self.create_3dscenegraph_objects()
+
+
+
+        # Save each object as a separate .obj file
+        if self.DEBUG:
+            os.makedirs(self.object_output_scan_path, exist_ok=True)
+            # Remove all .obj files in the folder
+            for file in os.listdir(self.object_output_scan_path):
+                if file.endswith(".obj"):
+                    os.remove(os.path.join(self.object_output_scan_path, file))
+                    self.logger.debug(f"Removed file: {file}")
+
+            for obj in objects:
+                obj_vertices = self.mesh_vertices[obj.index_set]
+
+                obj_file_path = os.path.join(self.object_output_scan_path, f"{obj.name.replace(' ', '_')}_{len(obj.index_set)}_vertices.obj")
+                with open(obj_file_path, 'w') as obj_file:
+                # Write vertices
+                    for vertex in obj_vertices:
+                        obj_file.write(f"v {vertex[0]} {vertex[1]} {vertex[2]}\n")
+
+                self.logger.debug(f"Saved object {obj.name} to {obj_file_path}")
+
 
         # make extra check in case two same objects are next to each other
         self.objects = self.duplicate_double_check(objects)
@@ -194,9 +222,15 @@ class SceneGraph3D:
             unit="objects"
         )
 
+        new_objects = []
+        new_objects_id = 0  
         for obj in objects:
-            if any(keyword in obj.name.lower().replace('-', ' ').split() for keyword in ["floor", "wall"]):
+            if any(keyword in obj.name.lower().replace('-', ' ').split() for keyword in ["floor", "wall", "table", "ceiling"]):
                 print("Skipping floor or wall")
+                obj.object_id = new_objects_id
+                obj.name = obj.name + " " + str(new_objects_id)
+                new_objects_id += 1
+                new_objects.append(obj)
                 pbar.update()
                 continue
             pbar.set_description("Checking for duplicates: {}".format(obj.name))
@@ -249,15 +283,43 @@ class SceneGraph3D:
             obj_name_no_numbers = ''.join([char for char in obj.name if not char.isdigit()])
             similarity_1 = compute_similarity(save_image_path, "There is only one " + obj_name_no_numbers)
             similarity_2 = compute_similarity(save_image_path, "There are multiple " + obj_name_no_numbers)
-            if similarity_1 > similarity_2:
-                obj.name = "One " + obj_name_no_numbers
+            self.logger.info("Similarity for one {}: {}".format(obj_name_no_numbers, similarity_1))
+            self.logger.info("Similarity for multiple {}: {}".format(obj_name_no_numbers, similarity_2))
+            if similarity_1 < similarity_2:
+                # Use k-means clustering to find new objects
+                number_new_cluster, new_index_sets = find_best_kmeans_clusters(self.mesh_vertices[obj.index_set])
+                self.logger.info("Found {} clusters for object {}".format(number_new_cluster, obj.name))
+                
+                new_index_sets = [np.array(obj.index_set)[np.where(new_index_sets == i)[0]] for i in range(number_new_cluster)]
+                
+                # create new objects
+                split_objects = []
+                for i, new_index_set in enumerate(new_index_sets):
+                    new_object = self.Objects(
+                        obj.name + " " + str(new_objects_id),
+                        new_objects_id,
+                        obj.class_id,
+                        new_index_set,
+                        np.mean(self.mesh_vertices[new_index_set], axis=0)[0],
+                        np.mean(self.mesh_vertices[new_index_set], axis=0)[1],
+                        np.mean(self.mesh_vertices[new_index_set], axis=0)[2],
+                        [],
+                        [],
+                        obj.best_perspective_frame
+                    )
+                    split_objects.append(new_object)
+                    new_objects_id += 1
+                
+                
+                new_objects.extend(split_objects)
+
             else:
-                obj.name = "Multiple " + obj_name_no_numbers
-            self.logger.debug("Similarity for one {}: {}".format(obj_name_no_numbers, similarity_1))
-            self.logger.debug("Similarity for multiple {}: {}".format(obj_name_no_numbers, similarity_2))
-        
+                new_objects.append(obj)
+
         pbar.close()
-        return objects
+        #update neighbors
+        self.update_neighbors(new_objects, self.edges_boarders)
+        return new_objects
 
 
     def distribute_panoptic_segmentations(self):
@@ -426,7 +488,7 @@ class SceneGraph3D:
         for i, blob in enumerate(blobs):
             # use one vertex to get object name
             object_id = i
-            object_class = self.id_to_class[self.mesh_vertices_classes[blob[0]]] + " " + str(i)
+            object_class = self.id_to_class[self.mesh_vertices_classes[blob[0]]]
             # check for duplicates
             class_id = self.mesh_vertices_classes[blob[0]]
             center = np.mean(self.mesh_vertices[blob], axis=0)
@@ -439,10 +501,12 @@ class SceneGraph3D:
 
             objects.append(self.Objects(object_class, object_id, class_id, blob, center[0], center[1], center[2], neighbors, relations, best_perspective_frame))
 
-
-        edges_boarders = self.mesh_edges[np.logical_and(self.mesh_vertices_classes[self.mesh_edges[:, 0]] != self.mesh_vertices_classes[self.mesh_edges[:, 1]], 
-                                                        np.logical_and(self.mesh_vertices_classes[self.mesh_edges[:, 0]] != -1,
-                                                                        self.mesh_vertices_classes[self.mesh_edges[:, 1]] != -1))]
+        # will be done after object duplicate check
+        # self.update_neighbors(objects, self.edges_boarders)
+            
+        return objects
+    
+    def update_neighbors(self, objects, edges_boarders):
         for edge in edges_boarders:
             object_id_0 = np.where([edge[0] in obj.index_set for obj in objects])[0]
             object_id_1 = np.where([edge[1] in obj.index_set for obj in objects])[0]
@@ -455,8 +519,6 @@ class SceneGraph3D:
                 objects[object_id_0].neighbors.append(int(object_id_1))
             if object_id_0 not in objects[object_id_1].neighbors:
                 objects[object_id_1].neighbors.append(int(object_id_0))
-            
-        return objects
 
 
     def save_segmented_pointcloud(self):
