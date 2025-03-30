@@ -95,7 +95,7 @@ class SceneGraph3D:
         # distribute the panoptic segmentations from the images to the mesh vertices and remember in which frames a vertex was observed
         self.mesh_vertices_votes_global, self.mesh_vertices_frame_observations = self.distribute_panoptic_segmentations()
 
-        # fuse votes to the vote that is most frequen (global), except for 0 
+        # fuse votes to the vote that is most frequent (global), except for 0 
         self.mesh_vertices_classes = np.apply_along_axis(lambda row: self.classes[np.argmax(row)] if np.any(row) else -1, 1, self.mesh_vertices_votes_global)
 
         # extract class names and colors from metadata
@@ -114,30 +114,12 @@ class SceneGraph3D:
 
 
 
-        # Save each object as a separate .obj file
-        if self.DEBUG:
-            os.makedirs(self.object_output_scan_path, exist_ok=True)
-            # Remove all .obj files in the folder
-            for file in os.listdir(self.object_output_scan_path):
-                if file.endswith(".obj"):
-                    os.remove(os.path.join(self.object_output_scan_path, file))
-                    self.logger.debug(f"Removed file: {file}")
-
-            for obj in objects:
-                obj_vertices = self.mesh_vertices[obj.index_set]
-
-                obj_file_path = os.path.join(self.object_output_scan_path, f"{obj.name.replace(' ', '_')}_{len(obj.index_set)}_vertices.obj")
-                with open(obj_file_path, 'w') as obj_file:
-                # Write vertices
-                    for vertex in obj_vertices:
-                        obj_file.write(f"v {vertex[0]} {vertex[1]} {vertex[2]}\n")
-
-                self.logger.debug(f"Saved object {obj.name} to {obj_file_path}")
-
-
         # make extra check in case two same objects are next to each other
-        self.objects = self.duplicate_double_check(objects)
+        self.objects = self.duplicate_double_check_mask2former(objects)
+        # self.objects = self.duplicate_double_check_kmeans(objects)
 
+        self.save_object_vertices(self.objects)
+        
         # save objects into a json file
         if not os.path.exists(self.result_output_scan_path):
             os.makedirs(self.result_output_scan_path, exist_ok=True)
@@ -216,7 +198,7 @@ class SceneGraph3D:
 
         self.logger.important("Finished running Mask2former on images")
 
-    def duplicate_double_check(self, objects):
+    def duplicate_double_check_mask2former(self, objects):
         pbar = tqdm.tqdm(
             total=len(objects),
             unit="objects"
@@ -233,8 +215,88 @@ class SceneGraph3D:
                 new_objects.append(obj)
                 pbar.update()
                 continue
-            pbar.set_description("Checking for duplicates: {}".format(obj.name))
+            pbar.set_description("Checking for duplicates (mask2former): {}".format(obj.name))
             pbar.update()
+
+            # load from saved files
+            image_path = os.path.join(self.full_output_scan_path, obj.best_perspective_frame)
+            panoptic_seg, panoptic_seg_info = pickle.load(open(image_path + '.pkl', 'rb'))
+            image_info = json.load(open(image_path + '.json', 'r'))
+            
+            # Count the occurrences of each unique value
+            local_class_values = [i for i, _ in enumerate(panoptic_seg_info) if panoptic_seg_info[i]['category_id'] == obj.class_id]
+            if len(local_class_values) == 1:
+                new_objects.append(obj)
+                new_objects_id
+                continue
+
+            # create mask for object
+            pose = np.array(image_info['cameraPoseARFrame']).reshape((4, 4))
+            projection_matrix = np.array(image_info['projectionMatrix']).reshape((4, 4))
+            view_matrix = np.linalg.inv(pose)
+            mvp = np.dot(projection_matrix, view_matrix)
+
+            projections = self.project_points_to_image(self.mesh_vertices[obj.index_set], mvp, panoptic_seg.shape[1], panoptic_seg.shape[0])
+            projections_2d = np.round(projections[:,:2]).astype(int) # round to nearest pixel
+            projections_2d = projections_2d[
+                (projections_2d[:, 0] >= 0) & 
+                (projections_2d[:, 0] < panoptic_seg.shape[1]) &
+                (projections_2d[:, 1] >= 0) & 
+                (projections_2d[:, 1] < panoptic_seg.shape[0])
+            ]
+
+            # Check the value of each point in projections_2d in the panoptic_seg
+            point_values = panoptic_seg[projections_2d[:, 1], projections_2d[:, 0]]
+            
+            # If there are multiple unique values for the object's class, split the object
+
+            self.logger.info(f"Object {obj.name} has multiple segments in the panoptic segmentation.")
+            for value in local_class_values:
+                new_index_set = np.array(obj.index_set)[np.where(np.isin(point_values, value+1))[0]]
+                new_object = self.Objects(
+                    obj.name + f"_{new_objects_id}",
+                    new_objects_id,
+                    obj.class_id,
+                    new_index_set,
+                    np.mean(self.mesh_vertices[new_index_set], axis=0)[0],
+                    np.mean(self.mesh_vertices[new_index_set], axis=0)[1],
+                    np.mean(self.mesh_vertices[new_index_set], axis=0)[2],
+                    [],
+                    [],
+                    obj.best_perspective_frame
+                )
+                new_objects.append(new_object)
+                new_objects_id += 1
+        
+        pbar.close()
+        #update neighbors
+        self.update_neighbors(new_objects, self.edges_boarders)
+        return new_objects
+
+
+
+            
+
+    def duplicate_double_check_kmeans(self, objects):
+        pbar = tqdm.tqdm(
+            total=len(objects),
+            unit="objects"
+        )
+
+        new_objects = []
+        new_objects_id = 0  
+        for obj in objects:
+            if any(keyword in obj.name.lower().replace('-', ' ').split() for keyword in ["floor", "wall", "table", "ceiling"]):
+                print("Skipping floor or wall")
+                obj.object_id = new_objects_id
+                obj.name = obj.name + " " + str(new_objects_id)
+                new_objects_id += 1
+                new_objects.append(obj)
+                pbar.update()
+                continue
+            pbar.set_description("Checking for duplicates (kmeans): {}".format(obj.name))
+            pbar.update()
+
             image_path = os.path.join(self.input_scan_path, obj.best_perspective_frame) + '.jpg'
             image = read_image(image_path, format="BGR")
             image_info_path = os.path.join(self.full_output_scan_path, obj.best_perspective_frame) + '.json'
@@ -552,6 +614,27 @@ class SceneGraph3D:
             fig.write_html(name + '.html')
 
             self.logger.info("saved pointcloud visualization html")
+
+    def save_object_vertices(self, objects):
+        # Save each object as a separate .obj file
+        if self.DEBUG:
+            os.makedirs(self.object_output_scan_path, exist_ok=True)
+            # Remove all .obj files in the folder
+            for file in os.listdir(self.object_output_scan_path):
+                if file.endswith(".obj"):
+                    os.remove(os.path.join(self.object_output_scan_path, file))
+                    self.logger.debug(f"Removed file: {file}")
+
+            for obj in objects:
+                obj_vertices = self.mesh_vertices[obj.index_set]
+
+                obj_file_path = os.path.join(self.object_output_scan_path, f"{obj.name.replace(' ', '_')}_{len(obj.index_set)}_vertices.obj")
+                with open(obj_file_path, 'w') as obj_file:
+                # Write vertices
+                    for vertex in obj_vertices:
+                        obj_file.write(f"v {vertex[0]} {vertex[1]} {vertex[2]}\n")
+
+                self.logger.debug(f"Saved object {obj.name} to {obj_file_path}")
             
                 
     
@@ -618,3 +701,7 @@ class SceneGraph3D:
             self.neighbors = [int(i) for i in neighbors]
             self.relations = [str(i) for i in relations]
             self.best_perspective_frame = best_perspective_frame if best_perspective_frame is not None else None
+
+# TODO: 
+# use segmentation from mask2former on best perspective image to split image, use current split method on top
+# Investigate scannet and mean-IoU metric and produce some metric benchmark
