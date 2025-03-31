@@ -208,8 +208,24 @@ class SceneGraph3D:
         new_objects = []
         new_objects_id = 0  
         for obj in objects:
+            # go over images that see the object and find image that features the most instances of the object type
+            # frames_tmp = [frame for idx in blob for frame in self.mesh_vertices_frame_observations[idx]]
+            frames_tmp = np.unique([frame for idx in obj.index_set for frame in self.mesh_vertices_frame_observations[idx]])
+
+            best_perspective_frame = None
+            object_count_best = -1
+            for frame in frames_tmp:
+                image_path = os.path.join(self.full_output_scan_path, frame)
+                panoptic_seg, panoptic_seg_info = pickle.load(open(image_path + '.pkl', 'rb'))
+                
+                object_count = np.sum(segment_info['category_id'] == obj.class_id for segment_info in panoptic_seg_info)
+                if object_count > object_count_best:
+                    best_perspective_frame = frame
+                    object_count_best = object_count
+
+                    
             # load from saved files
-            image_path = os.path.join(self.full_output_scan_path, obj.best_perspective_frame)
+            image_path = os.path.join(self.full_output_scan_path, best_perspective_frame)
             panoptic_seg, panoptic_seg_info = pickle.load(open(image_path + '.pkl', 'rb'))
             image_info = json.load(open(image_path + '.json', 'r'))
 
@@ -258,7 +274,7 @@ class SceneGraph3D:
                     np.mean(self.mesh_vertices[new_index_set], axis=0)[2],
                     [],
                     [],
-                    obj.best_perspective_frame
+                    best_perspective_frame
                 )
                 new_objects.append(new_object)
                 new_objects_id += 1
@@ -555,11 +571,11 @@ class SceneGraph3D:
             neighbors = []
             relations = []
 
-            frames_tmp = [frame for idx in blob for frame in self.mesh_vertices_frame_observations[idx]]
-            best_perspective_frame = max(set(frames_tmp), key=frames_tmp.count)
+            # frames_tmp = [frame for idx in blob for frame in self.mesh_vertices_frame_observations[idx]]
+            # best_perspective_frame = max(set(frames_tmp), key=frames_tmp.count)
 
 
-            objects.append(self.Objects(object_class, object_id, class_id, blob, center[0], center[1], center[2], neighbors, relations, best_perspective_frame))
+            objects.append(self.Objects(object_class, object_id, class_id, blob, center[0], center[1], center[2], neighbors, relations))
 
         # will be done after object duplicate check
         # self.update_neighbors(objects, self.edges_boarders)
