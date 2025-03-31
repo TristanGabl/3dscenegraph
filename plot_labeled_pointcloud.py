@@ -15,17 +15,40 @@ def plot_labeled_pointcloud(self, name, ids, vertices, edges, edge_relationships
         obj.y, obj.z = obj.z, obj.y
 
     # name to color
-    dict_name_to_color = {ids_to_class[i]: f'rgb({ids_to_class_color[i][0]},{ids_to_class_color[i][1]},{ids_to_class_color[i][2]})' for i, name in ids_to_class.items()}
-    dict_name_to_color['unknown'] = 'rgb(0,0,0)'
+    # dict_name_to_color = {ids_to_class[i]: f'rgb({ids_to_class_color[i][0]},{ids_to_class_color[i][1]},{ids_to_class_color[i][2]})' for i, name in ids_to_class.items()}
+    # dict_name_to_color['unknown'] = 'rgb(0,0,0)'
+
+    # object to color
+    num_objects = len(objects)
+    colors = [f'rgb({int(255 * i / (num_objects - 1))},{int(255 * (1 - i / (num_objects - 1)))},128)' for i in range(num_objects)]
+    dict_object_to_color = {obj.name: colors[i] for i, obj in enumerate(objects)}
+    dict_object_to_color['background'] = 'rgb(0,0,0)'
+    
+    # id to object
+    dict_id_to_object = {}
+    for obj in objects:
+        if hasattr(obj, 'index_set'):
+            for id_ in obj.index_set:
+                dict_id_to_object[id_] = obj.name
+        else:
+            print(f"Warning: Object {obj.name} is missing 'index_set' attribute.")
+
+
+
+    # id to color
+    # dict_id_to_color = {id_: dict_object_to_color[dict_id_to_object[id_]] for id_ in dict_id_to_object}
 
     # add vertices
     df = pd.DataFrame(vertices, columns=['x', 'y', 'z'])
     df['id'] = ids
-    df['labels'] = df['id'].apply(lambda x: 'unknown' if x == -1 else ids_to_class[x])
-    df['color'] = df['id'].apply(lambda x: 'rgb(0,0,0)' if x == -1 else f'rgb({ids_to_class_color[x][0]},{ids_to_class_color[x][1]},{ids_to_class_color[x][2]})')
+    df['labels'] = [dict_id_to_object[i] if i in dict_id_to_object else 'background' for i,x in enumerate(ids)]
+    df['color'] = [dict_object_to_color[dict_id_to_object[i]] if i in dict_id_to_object else 'rgb(0,0,0)' for i in ids]
+
+
+    # df['color'] = df['id'].apply(lambda x: 'rgb(0,0,0)' if x == -1 else f'rgb({ids_to_class_color[x][0]},{ids_to_class_color[x][1]},{ids_to_class_color[x][2]})')
     
     fig = px.scatter_3d(df, x='x', y='y', z='z', color='labels', 
-                        color_discrete_map=dict_name_to_color,
+                        color_discrete_map=dict_object_to_color,
                         hover_data={'x': True, 'y': True, 'z': True, 'id': True, 'labels': True, 'color': True}
                         )
     
