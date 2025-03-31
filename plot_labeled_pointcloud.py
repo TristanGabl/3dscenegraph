@@ -45,7 +45,6 @@ def plot_labeled_pointcloud(self, name, ids, vertices, edges, edge_relationships
     df['color'] = [dict_object_to_color[dict_id_to_object[i]] if i in dict_id_to_object else 'rgb(0,0,0)' for i in ids]
 
 
-    # df['color'] = df['id'].apply(lambda x: 'rgb(0,0,0)' if x == -1 else f'rgb({ids_to_class_color[x][0]},{ids_to_class_color[x][1]},{ids_to_class_color[x][2]})')
     
     fig = px.scatter_3d(df, x='x', y='y', z='z', color='labels', 
                         color_discrete_map=dict_object_to_color,

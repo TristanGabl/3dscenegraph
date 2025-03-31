@@ -112,11 +112,12 @@ class SceneGraph3D:
         
         objects = self.create_3dscenegraph_objects()
 
-
-
         # make extra check in case two same objects are next to each other
         self.objects = self.duplicate_double_check_mask2former(objects)
         # self.objects = self.duplicate_double_check_kmeans(objects)
+
+        # assign lost vertices to nearest object by using BFS
+        # self.objects = self.assign_lost_vertices_to_nearest_object(objects)
 
         self.save_object_vertices(self.objects)
         
@@ -207,8 +208,14 @@ class SceneGraph3D:
         new_objects = []
         new_objects_id = 0  
         for obj in objects:
-            if any(keyword in obj.name.lower().replace('-', ' ').split() for keyword in ["floor", "wall", "table", "ceiling"]):
-                print("Skipping floor or wall")
+            # load from saved files
+            image_path = os.path.join(self.full_output_scan_path, obj.best_perspective_frame)
+            panoptic_seg, panoptic_seg_info = pickle.load(open(image_path + '.pkl', 'rb'))
+            image_info = json.load(open(image_path + '.json', 'r'))
+
+            local_class_values = [i for i, _ in enumerate(panoptic_seg_info) if panoptic_seg_info[i]['category_id'] == obj.class_id]
+            if any(keyword in obj.name.lower().replace('-', ' ').split() for keyword in ["floor", "wall", "table", "ceiling"]) or len(local_class_values) == 1:
+                print("Skipping floor or wall, etc., or single object")
                 obj.object_id = new_objects_id
                 obj.name = obj.name + " " + str(new_objects_id)
                 new_objects_id += 1
@@ -216,19 +223,7 @@ class SceneGraph3D:
                 pbar.update()
                 continue
             pbar.set_description("Checking for duplicates (mask2former): {}".format(obj.name))
-            pbar.update()
-
-            # load from saved files
-            image_path = os.path.join(self.full_output_scan_path, obj.best_perspective_frame)
-            panoptic_seg, panoptic_seg_info = pickle.load(open(image_path + '.pkl', 'rb'))
-            image_info = json.load(open(image_path + '.json', 'r'))
-            
-            # Count the occurrences of each unique value
-            local_class_values = [i for i, _ in enumerate(panoptic_seg_info) if panoptic_seg_info[i]['category_id'] == obj.class_id]
-            if len(local_class_values) == 1:
-                new_objects.append(obj)
-                new_objects_id
-                continue
+            pbar.update()            
 
             # create mask for object
             pose = np.array(image_info['cameraPoseARFrame']).reshape((4, 4))
@@ -273,7 +268,10 @@ class SceneGraph3D:
         self.update_neighbors(new_objects, self.edges_boarders)
         return new_objects
 
+    
+    def assign_lost_vertices_to_nearest_object(self, objects):
 
+        pass
 
             
 
