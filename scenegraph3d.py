@@ -38,6 +38,7 @@ class SceneGraph3D:
         args, 
         DEBUG: bool,
         SAVE_VISUALIZATION: bool,
+        SAVE_OBJECTS: bool,
         FORCE_MASK2FORMER: bool,
         SHORTCUT_0: bool,
         SHORTCUT_1: bool,
@@ -51,6 +52,8 @@ class SceneGraph3D:
         self.logger.info("Arguments: " + str(args))
         self.SAVE_VISUALIZATION = SAVE_VISUALIZATION
         self.logger.info("SAVE_VISUALIZATION: " + str(SAVE_VISUALIZATION))
+        self.SAVE_OBJECTS = SAVE_OBJECTS
+        self.logger.info("SAVE_OBJECTS: " + str(SAVE_OBJECTS))
         self.FORCE_MASK2FORMER = FORCE_MASK2FORMER
         self.logger.info("FORCE_MASK2FORMER: " + str(FORCE_MASK2FORMER))
         self.SHORTCUT_0 = SHORTCUT_0
@@ -79,7 +82,7 @@ class SceneGraph3D:
         self.logger.info("Number image frames: " + str(len(self.input_frames)))
 
         # check if scan has depth images
-        if not os.path.exists(os.path.join(self.input_scan_path, 'depth_00000.png')):
+        if not any("depth" in file and file.endswith(".png") for file in os.listdir(self.input_scan_path)):
             self.logger.error("No depth images found in input directory, skipping depth map projection")
             
     
@@ -119,7 +122,8 @@ class SceneGraph3D:
         # assign lost vertices to nearest object by using BFS
         # self.objects = self.assign_lost_vertices_to_nearest_object(objects)
 
-        self.save_object_vertices(self.objects)
+        if self.SAVE_OBJECTS:
+            self.save_object_vertices(self.objects)
         
         # save objects into a json file
         if not os.path.exists(self.result_output_scan_path):
@@ -155,8 +159,10 @@ class SceneGraph3D:
                 pbar.update()
 
                 image_info = json.load(open(image_info_path, 'r'))
-                if image_info['cameraPoseARFrame'] is None or image_info['projectionMatrix'] is None:
-                    self.logger.warning("{}: cameraPoseARFrame or projectionMatrix not found in image info json file, skipping this image".format(frame))
+
+
+                if not any(key in image_info.keys() for key in ["cameraPoseARFrame", "projectionMatrix", "mvp"]):
+                    self.logger.warning("{}: None of cameraPoseARFrame, projectionMatrix, or mvp found in image info json file, skipping this image".format(frame))
                     # remove frame
                     self.input_frames.remove(frame)
                     continue
@@ -217,7 +223,7 @@ class SceneGraph3D:
             for frame in frames_tmp:
                 image_path = os.path.join(self.full_output_scan_path, frame)
                 panoptic_seg, panoptic_seg_info = pickle.load(open(image_path + '.pkl', 'rb'))
-                
+
                 object_count = np.sum(segment_info['category_id'] == obj.class_id for segment_info in panoptic_seg_info)
                 if object_count > object_count_best:
                     best_perspective_frame = frame
@@ -583,6 +589,7 @@ class SceneGraph3D:
         return objects
     
     def update_neighbors(self, objects, edges_boarders):
+        self.logger.info("Updating neighbors...")
         for edge in edges_boarders:
             object_id_0 = np.where([edge[0] in obj.index_set for obj in objects])[0]
             object_id_1 = np.where([edge[1] in obj.index_set for obj in objects])[0]
@@ -595,6 +602,7 @@ class SceneGraph3D:
                 objects[object_id_0].neighbors.append(int(object_id_1))
             if object_id_0 not in objects[object_id_1].neighbors:
                 objects[object_id_1].neighbors.append(int(object_id_0))
+        self.logger.info("Updated neighbors!")
 
 
     def save_segmented_pointcloud(self):
@@ -717,5 +725,12 @@ class SceneGraph3D:
             self.best_perspective_frame = best_perspective_frame if best_perspective_frame is not None else None
 
 # TODO: 
-# use segmentation from mask2former on best perspective image to split image, use current split method on top
 # Investigate scannet and mean-IoU metric and produce some metric benchmark
+# other models mean-IoU: https://paperswithcode.com/sota/semantic-segmentation-on-scannetv2
+# add random color palette for objects
+# use a BFS to assign lost vertices to nearest object
+
+
+# DONE:
+# use segmentation from mask2former on best perspective image to split image, use current split method on top - check
+

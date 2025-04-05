@@ -24,7 +24,7 @@ def compute_pca_eigenvalue_ratios(points):
     
     return np.column_stack((np.full((points.shape[0], 1), ratio1), np.full((points.shape[0], 1), ratio2)))
 
-def find_best_kmeans_clusters(points, k_min=2, k_max=5):
+def find_best_kmeans_clusters(points, k_min=2, k_max=2):
     best_k = k_min
     best_score = -1
     best_labels = None
@@ -64,7 +64,7 @@ if __name__ == "__main__":
 
     # Load points from the OBJ file
 
-    mesh = trimesh.load('output/double_chairs_scan/objects/chair_8620_vertices.obj')
+    mesh = trimesh.load('output/two_books_scan/objects/book_3_338_vertices.obj')
     points = np.array(mesh.vertices)
 
     # Find the best number of clusters and their labels

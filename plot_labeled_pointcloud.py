@@ -3,6 +3,8 @@ import trimesh
 import plotly.express as px
 import plotly.graph_objects as go
 import pandas as pd
+import time
+
 # from matplotlib import cm
 
 def plot_labeled_pointcloud(self, name, ids, vertices, edges, edge_relationships, objects, ids_to_class, ids_to_class_color):
@@ -51,16 +53,25 @@ def plot_labeled_pointcloud(self, name, ids, vertices, edges, edge_relationships
                         hover_data={'x': True, 'y': True, 'z': True, 'id': True, 'labels': True, 'color': True}
                         )
     
+
     # add edges
     edge_x = []
     edge_y = []
     edge_z = []
-    for edge in edges:
-        x0, y0, z0 = df.iloc[edge[0]][['x', 'y', 'z']]
-        x1, y1, z1 = df.iloc[edge[1]][['x', 'y', 'z']]
-        edge_x += [x0, x1, None]  # None to break the line between edges
-        edge_y += [y0, y1, None]
-        edge_z += [z0, z1, None]
+
+    coords = df[['x', 'y', 'z']].to_numpy()
+    edge_coords = coords[np.array(edges)]  # shape: (num_edges, 2, 3)
+
+    edge_x = edge_coords[:, :, 0].flatten()
+    edge_y = edge_coords[:, :, 1].flatten()
+    edge_z = edge_coords[:, :, 2].flatten()
+
+    # Insert None between edge segments
+    insert_indices = np.arange(2, edge_x.size + 1, 2)
+    edge_x = np.insert(edge_x, insert_indices, None)
+    edge_y = np.insert(edge_y, insert_indices, None)
+    edge_z = np.insert(edge_z, insert_indices, None)
+
 
     edge_trace = go.Scatter3d(x=edge_x, y=edge_y, z=edge_z, mode='lines', line=dict(color='black', width=1), hoverinfo='none')
     edge_trace.name = 'edges'
@@ -83,7 +94,7 @@ def plot_labeled_pointcloud(self, name, ids, vertices, edges, edge_relationships
     for trace in obj_points.data:
         fig.add_trace(trace)
 
-    
+
     # add relationships edges between object centers
     edge_x = []
     edge_y = []

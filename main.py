@@ -32,9 +32,10 @@ from scenegraph3d import SceneGraph3D
 
 DEBUG = True
 save_visualization = True
+save_objects = False
 FORCE_MASK2FORMER = False # if True, the mask2former model will be run even if the processed images already exist
-SHORTCUT_0 = True # if True, generating frame_XXXXX_projections.jpg will be skipped
-SHORTCUT_1 = True # if True, generating frame_XXXXX_fused_votes.jpg will be skipped
+SHORTCUT_0 = False # if True, generating frame_XXXXX_projections.jpg will be skipped
+SHORTCUT_1 = False # if True, generating frame_XXXXX_fused_votes.jpg will be skipped
 
 USE_LLM = False
 
@@ -81,7 +82,7 @@ def get_parser():
 def main():
     args = get_parser().parse_args()
 
-    pipeline = SceneGraph3D(args, DEBUG, save_visualization, FORCE_MASK2FORMER, SHORTCUT_0, SHORTCUT_1, USE_LLM)
+    pipeline = SceneGraph3D(args, DEBUG, save_visualization, save_objects, FORCE_MASK2FORMER, SHORTCUT_0, SHORTCUT_1, USE_LLM)
 
     pipeline.generate_3d_scene_graph()
 
