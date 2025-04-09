@@ -4,6 +4,7 @@ import multiprocessing as mp
 import os
 
 import pickle
+import re
 import trimesh
 import json
 
@@ -84,6 +85,14 @@ class SceneGraph3D:
         # check if scan has depth images
         if not any("depth" in file and file.endswith(".png") for file in os.listdir(self.input_scan_path)):
             self.logger.error("No depth images found in input directory, skipping depth map projection")
+
+        # check if it is a scannet scan or 3d scanner app scan
+        # self.scan_type = "scannet" if 
+        if re.match(r"scene\d{4}_\d{2}", self.input_folder_name):
+            self.scan_type = "scannet"
+        else:
+            self.scan_type = "3dscannerapp"
+        self.logger.info("Scan type: " + self.scan_type)
             
     
     def generate_3d_scene_graph(self): # main function
@@ -113,10 +122,10 @@ class SceneGraph3D:
         self.edges_boarders = self.mesh_edges[np.logical_and(self.mesh_vertices_classes[self.mesh_edges[:, 0]] != self.mesh_vertices_classes[self.mesh_edges[:, 1]], 
                                               np.logical_and(self.mesh_vertices_classes[self.mesh_edges[:, 0]] != -1, self.mesh_vertices_classes[self.mesh_edges[:, 1]] != -1))]
         
-        objects = self.create_3dscenegraph_objects()
+        self.objects = self.create_3dscenegraph_objects()
 
         # make extra check in case two same objects are next to each other
-        self.objects = self.duplicate_double_check_mask2former(objects)
+        # self.objects = self.duplicate_double_check_mask2former(self.objects)
         # self.objects = self.duplicate_double_check_kmeans(objects)
 
         # assign lost vertices to nearest object by using BFS
@@ -160,12 +169,20 @@ class SceneGraph3D:
 
                 image_info = json.load(open(image_info_path, 'r'))
 
+                if self.scan_type == "scannet":
+                    if not any(key in image_info.keys() for key in ["calibrationColorIntrinsic", "calibrationDepthIntrinsic", "Pose", "depthShift", "depthWidth", "depthHeight", "colorWidth", "colorHeight"]):
+                        self.logger.warning("{}: Frame not in input frames, skipping this image".format(frame))
+                        # remove frame
+                        self.input_frames.remove(frame)
+                        continue
+                else: # "3dscannerapp"
+                    if not any(key in image_info.keys() for key in ["cameraPoseARFrame", "projectionMatrix"]):
+                        self.logger.warning("{}: None of cameraPoseARFrame, projectionMatrix, or mvp found in image info json file, skipping this image".format(frame))
+                        # remove frame
+                        self.input_frames.remove(frame)
+                        continue
 
-                if not any(key in image_info.keys() for key in ["cameraPoseARFrame", "projectionMatrix", "mvp"]):
-                    self.logger.warning("{}: None of cameraPoseARFrame, projectionMatrix, or mvp found in image info json file, skipping this image".format(frame))
-                    # remove frame
-                    self.input_frames.remove(frame)
-                    continue
+                
 
                 os.makedirs(self.full_output_scan_path, exist_ok=True)
 
@@ -180,9 +197,14 @@ class SceneGraph3D:
                     pickle.dump((predictions["panoptic_seg"][0].to(torch.device("cpu")), predictions["panoptic_seg"][1]), f)
                 
                 # save image info
-                image_info_relevant = {key: image_info[key] for key in ['cameraPoseARFrame', 'projectionMatrix']}
-                with open(output_image_path + '.json', 'w') as f:
-                    json.dump(image_info_relevant, f)
+                if self.scan_type == "scannet":
+                    image_info_relevant = {key: image_info[key] for key in ['calibrationColorIntrinsic', 'calibrationDepthIntrinsic', 'Pose', 'depthShift', 'depthWidth', 'depthHeight', 'colorWidth', 'colorHeight']}
+                    with open(output_image_path + '.json', 'w') as f:
+                        json.dump(image_info_relevant, f)
+                else: # "3dscannerapp" 
+                    image_info_relevant = {key: image_info[key] for key in ['cameraPoseARFrame', 'projectionMatrix']}
+                    with open(output_image_path + '.json', 'w') as f:
+                        json.dump(image_info_relevant, f)
         
                 if self.SAVE_VISUALIZATION:
                     assert "panoptic_seg" in predictions
@@ -428,10 +450,17 @@ class SceneGraph3D:
             image = cv2.imread(frame + '.jpg')
             depth_map_path = os.path.join(self.input_scan_path, frame.split('/')[-1].replace("frame", "depth") + ".png")
             depth_map = cv2.imread(depth_map_path, cv2.IMREAD_UNCHANGED) / 1000 # convert to meters
-            depth_map = cv2.resize(depth_map, (image.shape[1], image.shape[0]), interpolation=cv2.INTER_NEAREST) # resize to image size
+            if self.scan_type == "scannet":
+                # depth_map = depth_map
+                depth_map = cv2.resize(depth_map, (image.shape[1], image.shape[0]), interpolation=cv2.INTER_NEAREST) # resize to image size
+            else:
+                depth_map = cv2.resize(depth_map, (image.shape[1], image.shape[0]), interpolation=cv2.INTER_NEAREST) # resize to image size
 
             # project the 3d point cloud into the image and filter out points that are not in the image
-            projections_filtered, projections_filtered_mask = self.project_pointcloud(image_info, image)
+            if self.scan_type == "scannet":
+                projections_filtered, projections_filtered_mask = self.project_pointcloud_scannet(image_info, image)
+            else:
+                projections_filtered, projections_filtered_mask = self.project_pointcloud_3dscannerapp(image_info, image)
 
             # remember what image a vertex was observed in
             [mesh_vertices_frame_observations[idx].add(frame.split("/")[-1]) for idx in np.where(projections_filtered_mask)[0]]
@@ -443,7 +472,7 @@ class SceneGraph3D:
                 border_offset = 50
                 img_projected = cv2.copyMakeBorder(img_projected, border_offset, border_offset, border_offset, border_offset, cv2.BORDER_CONSTANT, value=[128, 128, 128])
                 for i, point in enumerate(projections_filtered[:,:2]): # leave out the depth
-                    cv2.circle(img_projected, tuple(point.ravel().astype(int) + border_offset), 5, (0, 0, 255), -1)
+                    cv2.circle(img_projected, tuple(point.ravel().astype(int) + border_offset), 1, (0, 0, 255), -1)
 
                 cv2.imwrite(frame + '_projections.jpg', img_projected) 
                 self.logger.debug("saved projections to {}_projections.jpg".format(frame))
@@ -522,9 +551,47 @@ class SceneGraph3D:
         
         return projections_class_votes_local, mesh_vertices_votes_global
         
+    def project_pointcloud_scannet(self, image_info, image):
+        pose = np.array(image_info['Pose']).reshape((4, 4))
+        pose = np.linalg.inv(pose)
+        # Convert 3D points to homogeneous coordinates
+        points_homogeneous = np.hstack((self.mesh_vertices, np.ones((self.mesh_vertices.shape[0], 1))))  # Shape: [N, 4]
+        points_camera = np.dot(points_homogeneous, pose.T)
 
-    def project_pointcloud(self, image_info, image):
+        K = np.array(image_info['calibrationColorIntrinsic'])[:3, :3]
+
+
+        # Project to image plane
+        points_2d = (K @ points_camera[:, :3].T).T  # [N, 3]
+
+        # Round and filter inside image bounds
+        points_2d[:, 0] /= points_2d[:, 2]
+        points_2d[:, 1] /= points_2d[:, 2]
+        points_2d[:, :2] = np.round(points_2d[:, :2]).astype(int) 
+
+        projections_filtered_mask = (
+            (points_2d[:, 0] >= 0) & (points_2d[:, 0] < image.shape[1]) &
+            (points_2d[:, 1] >= 0) & (points_2d[:, 1] < image.shape[0]) &
+            (points_2d[:, 2] > 0)  # Ensure points are in front of the camera
+        )
+
+        # Filter points
+        projections_filtered = points_2d[projections_filtered_mask]
+        
+
+        if self.DEBUG:
+            self.logger.debug("number_points_projected: {}".format(len(projections_filtered)))
+
+        return projections_filtered, projections_filtered_mask
+
+
+        
+
+
+
+    def project_pointcloud_3dscannerapp(self, image_info, image):
         # compute the model view projection matrix
+
         pose = np.array(image_info['cameraPoseARFrame']).reshape((4, 4))
         projection_matrix = np.array(image_info['projectionMatrix']).reshape((4, 4))
         view_matrix = np.linalg.inv(pose)
@@ -539,7 +606,15 @@ class SceneGraph3D:
 
         if self.DEBUG:
             self.logger.debug("number_points_projected: {}".format(len(projections_filtered)))
-        
+       # projections_filtered
+        # array([[1.12100000e+03, 6.00000000e+00, 2.23226316e+00],
+        #        [1.12700000e+03, 1.10000000e+01, 2.23858557e+00],
+        #        [1.13200000e+03, 4.00000000e+00, 2.23749928e+00],
+        #        ...,
+        #        [1.77700000e+03, 4.24000000e+02, 1.62636298e+00],
+        #        [1.78700000e+03, 4.30000000e+02, 1.60979556e+00],
+        #        [1.79200000e+03, 4.34000000e+02, 1.60229302e+00]])
+
         return projections_filtered, projections_filtered_mask
     
     def create_graph_edges(self):

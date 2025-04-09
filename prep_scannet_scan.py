@@ -35,9 +35,20 @@ def process_scans(input_folder, output_folder):
     # Extract m_calibrationDepthIntrinsic and m_calibrationColorIntrinsic
     depth_intrinsic_line = next(line for line in lines if line.startswith("m_calibrationDepthIntrinsic"))
     color_intrinsic_line = next(line for line in lines if line.startswith("m_calibrationColorIntrinsic"))
-
+    color_width_line = next(line for line in lines if line.startswith("m_colorWidth"))
+    color_height_line = next(line for line in lines if line.startswith("m_colorHeight"))
+    depth_width_line = next(line for line in lines if line.startswith("m_depthWidth"))
+    depth_height_line = next(line for line in lines if line.startswith("m_depthHeight"))
+    depth_shift_line = next(line for line in lines if line.startswith("m_depthShift"))
+    
     depth_intrinsic = np.array(list(map(float, depth_intrinsic_line.split('=')[1].strip().split()))).reshape(4, 4)
     color_intrinsic = np.array(list(map(float, color_intrinsic_line.split('=')[1].strip().split()))).reshape(4, 4)
+    color_width = int(color_width_line.split('=')[1].strip())
+    color_height = int(color_height_line.split('=')[1].strip())
+    depth_width = int(depth_width_line.split('=')[1].strip())
+    depth_height = int(depth_height_line.split('=')[1].strip())
+    depth_shift = float(depth_shift_line.split('=')[1].strip())
+
 
     # save ply file 
     
@@ -78,25 +89,28 @@ def process_scans(input_folder, output_folder):
 
 
 
-        image_info = json.load(open("scans/three_books_scan/frame_00004.json", 'r'))
-        projectionMatrix = np.array(image_info['projectionMatrix']).reshape((4, 4))
-        cameraPoseARFrame = np.array(image_info['cameraPoseARFrame']).reshape((4, 4))
+        # image_info = json.load(open("scans/three_books_scan/frame_00004.json", 'r'))
+        # projectionMatrix = np.array(image_info['projectionMatrix']).reshape((4, 4))
+        # cameraPoseARFrame = np.array(image_info['cameraPoseARFrame']).reshape((4, 4))
         # compute the projection matrix
-        projection_matrix = color_intrinsic @ pose
-        inv_color_intrinsic = np.linalg.inv(color_intrinsic)
-        view_matrix = np.linalg.inv(pose)
 
         # Calculate MVP matrix (projection * view)
-        mvp = np.dot(color_intrinsic, view_matrix)
+        
         # Save the MVP matrix into a JSON file
-        mvp_json_file = os.path.join(output_folder, f"frame_{frame_number}.json")
-        with open(mvp_json_file, 'w') as f:
-            json.dump({"mvp": mvp.tolist()}, f)
-
+        json_file = os.path.join(output_folder, f"frame_{frame_number}.json")
+        with open(json_file, 'w') as f:
+            json.dump({
+                'calibrationColorIntrinsic': color_intrinsic.tolist(),
+                'calibrationDepthIntrinsic': depth_intrinsic.tolist(),
+                'Pose': pose.tolist(),
+                'depthShift': depth_shift,
+                'depthWidth': depth_width,
+                'depthHeight': depth_height,
+                'colorWidth': color_width,
+                'colorHeight': color_height
+            }, f, indent=4)
         
-
-
-        
+                
 ## 
 # pose = np.array(image_info['cameraPoseARFrame']).reshape((4, 4))
 # projection_matrix = np.array(image_info['projectionMatrix']).reshape((4, 4))
