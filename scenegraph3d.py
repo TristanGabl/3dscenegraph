@@ -465,24 +465,49 @@ class SceneGraph3D:
             # remember what image a vertex was observed in
             [mesh_vertices_frame_observations[idx].add(frame.split("/")[-1]) for idx in np.where(projections_filtered_mask)[0]]
             
+            # projections_filtered has shape (n, 2) where n is the number of points, depth_map has shape (h, w), i want to get the depth of each point
+            if self.scan_type == "scannet":
+                # K_color = np.array(image_info['calibrationColorIntrinsic'])[:3, :3]
+                # K_depth = np.array(image_info['calibrationDepthIntrinsic'])[:3, :3]
+                # uvz = projections_filtered  # shape (N, 3)
+                # u_rgb, v_rgb, Z = uvz[:, 0], uvz[:, 1], uvz[:, 2]
+
+                # # Backproject RGB pixels to 3D
+                # x = (u_rgb - K_color[0, 2]) * Z / K_color[0, 0]
+                # y = (v_rgb - K_color[1, 2]) * Z / K_color[1, 1]
+                # xyz = np.stack([x, y, Z], axis=1)  # shape (N, 3)
+
+                # # Project to depth image
+                # xyz_h = xyz.T  # shape (3, N)
+                # uv_depth = K_depth @ (xyz_h / xyz_h[2])  # shape (3, N)
+                # projections_filtered_depth = uv_depth[:2].T  # shape (N, 2)
+                # depth_array = depth_map[projections_filtered_depth[:, 1].astype(int), projections_filtered_depth[:, 0].astype(int)]
+                depth_array = depth_map[projections_filtered[:, 1].astype(int), projections_filtered[:, 0].astype(int)]
+            else:
+                depth_array = depth_map[projections_filtered[:, 1].astype(int), projections_filtered[:, 0].astype(int)]
+
+
             # for debugging projected points
             if self.SAVE_VISUALIZATION and not self.SHORTCUT_0:
                 img_projected = cv2.cvtColor(image, cv2.COLOR_RGB2BGR)
                 # add grey border around the image for debugging
                 border_offset = 50
                 img_projected = cv2.copyMakeBorder(img_projected, border_offset, border_offset, border_offset, border_offset, cv2.BORDER_CONSTANT, value=[128, 128, 128])
-                for i, point in enumerate(projections_filtered[:,:2]): # leave out the depth
-                    cv2.circle(img_projected, tuple(point.ravel().astype(int) + border_offset), 1, (0, 0, 255), -1)
+
+                for i, point in enumerate(projections_filtered[:,:2]):
+                    if abs(projections_filtered[i, 2] - depth_array[i]) <= 0.03:
+                        cv2.circle(img_projected, tuple(point.ravel().astype(int) + border_offset), 2, (0, 0, 255), -1)
+                    else:
+                        cv2.circle(img_projected, tuple(point.ravel().astype(int) + border_offset), 2, (228, 228, 228), -1)
 
                 cv2.imwrite(frame + '_projections.jpg', img_projected) 
                 self.logger.debug("saved projections to {}_projections.jpg".format(frame))
             
+
             # we use panoptic_seg to get votes for object classes for each 3d point
             local_class_ids = np.array([segment_info['id'] for segment_info in panoptic_seg_info])
             # create matrix that stores the votes for each class for each filtered point
             projections_class_votes_local = np.zeros((len(projections_filtered), len(local_class_ids)))
-            # projections_filtered has shape (n, 2) where n is the number of points, depth_map has shape (h, w), i want to get the depth of each point
-            depth_array = depth_map[projections_filtered[:, 1].astype(int), projections_filtered[:, 0].astype(int)]
 
             # distribute the class votes to the mesh vertices
             projections_class_votes_local, mesh_vertices_votes_global = self.distribute_class_votes(mesh_vertices_votes_global, projections_filtered, projections_filtered_mask, panoptic_seg, panoptic_seg_info, depth_array, projections_class_votes_local)

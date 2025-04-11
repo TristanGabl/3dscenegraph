@@ -9,12 +9,13 @@ import time
 
 def plot_labeled_pointcloud(self, name, ids, vertices, edges, edge_relationships, objects, ids_to_class, ids_to_class_color):
 
-    # Invert the x-axis and switch the y and z axes
-    vertices[:, [0, 1, 2]] = vertices[:, [0, 2, 1]]
-    vertices[:, 0] = -vertices[:, 0]
-    for obj in objects:
-        obj.x = -obj.x
-        obj.y, obj.z = obj.z, obj.y
+    # Invert the x-axis and switch the y and z axes (for 3D Scanner App)
+    if self.scan_type == '3dscannerapp':
+        vertices[:, [0, 1, 2]] = vertices[:, [0, 2, 1]]
+        vertices[:, 0] = -vertices[:, 0]
+        for obj in objects:
+            obj.x = -obj.x
+            obj.y, obj.z = obj.z, obj.y
 
     # name to color
     # dict_name_to_color = {ids_to_class[i]: f'rgb({ids_to_class_color[i][0]},{ids_to_class_color[i][1]},{ids_to_class_color[i][2]})' for i, name in ids_to_class.items()}
