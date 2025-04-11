@@ -114,6 +114,10 @@ class SceneGraph3D:
         self.id_to_class = {i: name for i, name in enumerate(self.metadata.stuff_classes)}
         self.id_to_class_color = {i: color for i, color in enumerate(self.metadata.stuff_colors)}
 
+        with open("coco_id_to_name.json", "w") as json_file:
+            json.dump(self.id_to_class, json_file, indent=4)
+
+
         # create connected graph from the mesh vertices 
         self.mesh_edges = self.create_graph_edges()
 

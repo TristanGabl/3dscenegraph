@@ -4,10 +4,38 @@ import plotly.express as px
 import plotly.graph_objects as go
 import pandas as pd
 import time
+from plyfile import PlyData, PlyElement
+import json
 
 # from matplotlib import cm
 
+# Create a PLY file from vertices and labels
+def create_ply_file_in_scannet_format(vertices, labels, output_path):
+    
+    # Read the coco_id_to_scannet_id.json file
+    with open('coco_id_to_scannet_id.json', 'r') as f:
+        coco_to_scannet = json.load(f)
+    
+    # Convert labels to scannet ids
+    labels = [coco_to_scannet[f"{label}"] for label in labels]  # Default to 0 if not found
+
+    # Define the vertex structure
+    vertex_data = np.array(
+        [(v[0], v[1], v[2], l) for v, l in zip(vertices, labels)],
+        dtype=[('x', 'f4'), ('y', 'f4'), ('z', 'f4'), ('label', 'u4')]
+    )
+
+    # Create a PlyElement
+    vertex_element = PlyElement.describe(vertex_data, 'vertex')
+
+    # Write to a PLY file
+    PlyData([vertex_element]).write(output_path)
+
 def plot_labeled_pointcloud(self, name, ids, vertices, edges, edge_relationships, objects, ids_to_class, ids_to_class_color):
+
+
+    create_ply_file_in_scannet_format(vertices, ids, name + "_with_scannet_ids.ply")
+
 
     # Invert the x-axis and switch the y and z axes (for 3D Scanner App)
     if self.scan_type == '3dscannerapp':

@@ -34,7 +34,7 @@ DEBUG = False
 save_visualization = True
 save_objects = False
 FORCE_MASK2FORMER = False # if True, the mask2former model will be run even if the processed images already exist
-SHORTCUT_0 = False # if True, generating frame_XXXXX_projections.jpg will be skipped
+SHORTCUT_0 = True # if True, generating frame_XXXXX_projections.jpg will be skipped
 SHORTCUT_1 = True # if True, generating frame_XXXXX_fused_votes.jpg will be skipped
 
 USE_LLM = False
