@@ -10,7 +10,7 @@ import json
 import sys
 sys.path.insert(1, os.path.join(sys.path[0], './Mask2Former'))
 # change working directory to this folder 
-os.chdir('/home/tristan/3dscenegraph')
+os.chdir(os.path.dirname(os.path.abspath(__file__)))
 
 
 import cv2

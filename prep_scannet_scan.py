@@ -7,7 +7,7 @@ import json
 import trimesh
 
 
-def process_scans(input_folder, output_folder):
+def process_scans(input_folder, output_folder, drop):
     if not os.path.exists(input_folder):
         print(f"Input folder '{input_folder}' does not exist.")
         return
@@ -24,7 +24,7 @@ def process_scans(input_folder, output_folder):
     # Randomly drop 80% of the frames
     np.random.seed(42)  # For reproducibility
     total_frames = len(frames_numbers)
-    frames_to_keep = int(total_frames * 0.1)
+    frames_to_keep = int(total_frames * (1 - drop))
     frames_numbers = np.random.choice(frames_numbers, frames_to_keep, replace=False)
 
     info_file = os.path.join(input_folder, "_info.txt") # same for all
@@ -144,7 +144,7 @@ def main():
     parser.add_argument('--drop', type=float, default=0.9, help="Scaling factor for dropping frames (default: 0.9).")
     args = parser.parse_args()
 
-    process_scans(args.input, args.output)
+    process_scans(args.input, args.output, args.drop)
 
 if __name__ == "__main__":
     main()
