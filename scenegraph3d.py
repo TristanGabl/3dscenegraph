@@ -24,14 +24,17 @@ from detectron2.data import MetadataCatalog
 from detectron2.engine.defaults import DefaultPredictor
 from detectron2.utils.visualizer import ColorMode, Visualizer
 
-from mask2former import add_maskformer2_config 
+import sys
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), 'helper_repos', 'Mask2Former'))
+from mask2former import add_maskformer2_config
+from utils.scenegraph3d_objects import Objects
 
-from setup_logger import setup_logger
-from plot_labeled_pointcloud import plot_labeled_pointcloud
-from llm_gemini import generate_edge_relationships
+from utils.setup_logger import setup_logger
+from plot.plot_labeled_pointcloud import plot_labeled_pointcloud
+from utils.llm_gemini import generate_edge_relationships
 
-from open_clip_ import compute_similarity
-from find_clusters import find_best_kmeans_clusters
+from utils.open_clip_ import compute_similarity
+from utils.find_clusters import find_best_kmeans_clusters
 
 class SceneGraph3D:
     def __init__(
@@ -131,6 +134,7 @@ class SceneGraph3D:
         # make extra check in case two same objects are next to each other
         # self.objects = self.duplicate_double_check_mask2former(self.objects)
         # self.objects = self.duplicate_double_check_kmeans(objects)
+        self.update_neighbors(self.objects, self.edges_boarders)
 
         # assign lost vertices to nearest object by using BFS
         # self.objects = self.assign_lost_vertices_to_nearest_object(objects)
@@ -141,12 +145,19 @@ class SceneGraph3D:
         # save objects into a json file
         if not os.path.exists(self.result_output_scan_path):
             os.makedirs(self.result_output_scan_path, exist_ok=True)
+        self.objects_json = [{k: v for k, v in obj.__dict__.items() if k != 'index_set' and v != ''} for obj in self.objects]
         with open(os.path.join(self.result_output_scan_path, 'objects.json'), 'w') as f:
-            self.objects_json = [{k: v for k, v in obj.__dict__.items() if k != 'index_set'} for obj in self.objects]
             json.dump(self.objects_json, f, indent=4)
         
-        self.edge_relationships = generate_edge_relationships(self.objects_json, self.USE_LLM)
         
+        self.context_matrix, self.edge_relationships = generate_edge_relationships(self.objects_json, self.USE_LLM)
+
+        
+        # Save context_matrix to a JSON file as a 1D array
+        context_matrix_1d = [item for sublist in self.context_matrix for item in sublist if item != ""]
+        with open(os.path.join(self.result_output_scan_path, 'context_matrix.json'), 'w') as f:
+            json.dump(context_matrix_1d, f, indent=4)
+        self.logger.info("Saved context_matrix to context_matrix.json")
         # plot everything
         self.save_segmented_pointcloud()
 
@@ -296,7 +307,7 @@ class SceneGraph3D:
             self.logger.info(f"Object {obj.name} has multiple segments in the panoptic segmentation.")
             for value in local_class_values:
                 new_index_set = np.array(obj.index_set)[np.where(np.isin(point_values, value+1))[0]]
-                new_object = self.Objects(
+                new_object = Objects(
                     obj.name + f"_{new_objects_id}",
                     new_objects_id,
                     obj.class_id,
@@ -403,7 +414,7 @@ class SceneGraph3D:
                 # create new objects
                 split_objects = []
                 for i, new_index_set in enumerate(new_index_sets):
-                    new_object = self.Objects(
+                    new_object = Objects(
                         obj.name + " " + str(new_objects_id),
                         new_objects_id,
                         obj.class_id,
@@ -678,14 +689,27 @@ class SceneGraph3D:
             # check for duplicates
             class_id = self.mesh_vertices_classes[blob[0]]
             center = np.mean(self.mesh_vertices[blob], axis=0)
-            neighbors = []
-            relations = []
+            min_coords = np.min(self.mesh_vertices[blob], axis=0)
+            max_coords = np.max(self.mesh_vertices[blob], axis=0)
+            size_x = max_coords[0] - min_coords[0]
+            size_y = max_coords[1] - min_coords[1]
+            size_z = max_coords[2] - min_coords[2]
 
             # frames_tmp = [frame for idx in blob for frame in self.mesh_vertices_frame_observations[idx]]
             # best_perspective_frame = max(set(frames_tmp), key=frames_tmp.count)
 
+            # Calculate the bounding box around the vertices of the object
 
-            objects.append(self.Objects(object_class, object_id, class_id, blob, center[0], center[1], center[2], neighbors, relations))
+            objects.append(Objects(name=object_class, 
+                                   object_id=object_id, 
+                                   class_id=class_id, 
+                                   x=center[0], 
+                                   y=center[1], 
+                                   z=center[2],
+                                   size_x=size_x,
+                                   size_y=size_y,
+                                   size_z=size_z,
+                                   index_set=blob))
 
         # will be done after object duplicate check
         # self.update_neighbors(objects, self.edges_boarders)
@@ -805,29 +829,6 @@ class SceneGraph3D:
         return projections
     
     
-    class Objects:
-        def __init__(self,
-                     name: str,
-                     object_id: int, # index in collection of objects from scene
-                     class_id: int,  # class id from metadata of Mask2Former
-                     index_set: list, 
-                     x: float,
-                     y: float, 
-                     z: float,
-                     neighbors: list = [], # set of object_ids that touch this object
-                     relations: list = [],
-                     best_perspective_frame: list = None):
-            self.name = str(name)
-            self.object_id = int(object_id)
-            self.class_id = int(class_id)
-            self.index_set = [int(i) for i in index_set]
-            self.x = float(x)
-            self.y = float(y)
-            self.z = float(z)
-            self.neighbors = [int(i) for i in neighbors]
-            self.relations = [str(i) for i in relations]
-            self.best_perspective_frame = best_perspective_frame if best_perspective_frame is not None else None
-
 # TODO: 
 # Investigate scannet and mean-IoU metric and produce some metric benchmark
 # other models mean-IoU: https://paperswithcode.com/sota/semantic-segmentation-on-scannetv2

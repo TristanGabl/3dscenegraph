@@ -4,17 +4,46 @@ import plotly.express as px
 import plotly.graph_objects as go
 import pandas as pd
 import time
+from plyfile import PlyData, PlyElement
+import json
 
 # from matplotlib import cm
 
+# Create a PLY file from vertices and labels
+def create_ply_file_in_scannet_format(vertices, labels, output_path):
+    
+    # Read the coco_id_to_scannet_id.json file
+    with open('label_mapping/coco_id_to_scannet_id.json', 'r') as f:
+        coco_to_scannet = json.load(f)
+    
+    # Convert labels to scannet ids
+    labels = [coco_to_scannet[f"{label}"] for label in labels]  # Default to 0 if not found
+
+    # Define the vertex structure
+    vertex_data = np.array(
+        [(v[0], v[1], v[2], l) for v, l in zip(vertices, labels)],
+        dtype=[('x', 'f4'), ('y', 'f4'), ('z', 'f4'), ('label', 'u4')]
+    )
+
+    # Create a PlyElement
+    vertex_element = PlyElement.describe(vertex_data, 'vertex')
+
+    # Write to a PLY file
+    PlyData([vertex_element]).write(output_path)
+
 def plot_labeled_pointcloud(self, name, ids, vertices, edges, edge_relationships, objects, ids_to_class, ids_to_class_color):
 
-    # Invert the x-axis and switch the y and z axes
-    vertices[:, [0, 1, 2]] = vertices[:, [0, 2, 1]]
-    vertices[:, 0] = -vertices[:, 0]
-    for obj in objects:
-        obj.x = -obj.x
-        obj.y, obj.z = obj.z, obj.y
+
+    create_ply_file_in_scannet_format(vertices, ids, name + "_with_scannet_ids.ply")
+
+
+    # Invert the x-axis and switch the y and z axes (for 3D Scanner App)
+    if self.scan_type == '3dscannerapp':
+        vertices[:, [0, 1, 2]] = vertices[:, [0, 2, 1]]
+        vertices[:, 0] = -vertices[:, 0]
+        for obj in objects:
+            obj.x = -obj.x
+            obj.y, obj.z = obj.z, obj.y
 
     # name to color
     # dict_name_to_color = {ids_to_class[i]: f'rgb({ids_to_class_color[i][0]},{ids_to_class_color[i][1]},{ids_to_class_color[i][2]})' for i, name in ids_to_class.items()}

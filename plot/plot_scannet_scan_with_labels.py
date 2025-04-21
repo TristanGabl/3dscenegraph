@@ -8,7 +8,7 @@ import json
 # ground_truth
 ply0 = PlyData.read("ScanNet/scans/scene0134_02/scene0134_02_vh_clean_2.labels.ply")
 # predicted
-ply1 = PlyData.read("output/scene0134_02/plot/scene0134_02_pointcloud_classes_with_scannet_ids.ply")
+ply1 = PlyData.read("/home/tristan/Downloads/scene0134_02_pointcloud_classes_with_scannet_ids.ply")
 
 
 verts0 = np.stack([ply0['vertex'].data[name] for name in ('x', 'y', 'z')], axis=-1)
