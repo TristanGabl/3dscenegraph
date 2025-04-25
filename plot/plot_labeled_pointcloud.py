@@ -19,10 +19,11 @@ def create_ply_file_in_scannet_format(vertices, labels, output_path):
     # Convert labels to scannet ids
     labels = [coco_to_scannet[f"{label}"] for label in labels]  # Default to 0 if not found
 
+
     # Define the vertex structure
     vertex_data = np.array(
         [(v[0], v[1], v[2], l) for v, l in zip(vertices, labels)],
-        dtype=[('x', 'f4'), ('y', 'f4'), ('z', 'f4'), ('label', 'u4')]
+        dtype=[('x', 'f4'), ('y', 'f4'), ('z', 'f4'), ('label', 'i4')]
     )
 
     # Create a PlyElement
@@ -129,23 +130,52 @@ def plot_labeled_pointcloud(self, name, ids, vertices, edges, edge_relationships
     edge_x = []
     edge_y = []
     edge_z = []
-    relationships = []
-    for obj in objects:
-        for neighbor in obj.neighbors:
-            x0, y0, z0 = obj.x, obj.y, obj.z
-            x1, y1, z1 = objects[neighbor].x, objects[neighbor].y, objects[neighbor].z
+    midpoints = []
+    midpoint_texts = []
+
+    for i, obj1 in enumerate(objects):
+        for j in range(i + 1, len(objects)):
+            if edge_relationships[i][j] == "":
+                continue
+            obj2 = objects[j]
+            x0, y0, z0 = obj1.x, obj1.y, obj1.z
+            x1, y1, z1 = obj2.x, obj2.y, obj2.z
+            
+            # Add line endpoints
             edge_x += [x0, x1, None]
             edge_y += [y0, y1, None]
             edge_z += [z0, z1, None]
-            tmp = edge_relationships[obj.object_id][objects[neighbor].object_id]
-            relationships += [tmp, tmp, tmp]
             
-    
+            # Relationship text
+            text = f"{obj1.name} {edge_relationships[i][j]} {obj2.name}; {obj2.name} {edge_relationships[j][i]} {obj1.name}"
+            
+            # Calculate midpoint
+            mx, my, mz = (x0 + x1) / 2, (y0 + y1) / 2, (z0 + z1) / 2
+            midpoints.append((mx, my, mz))
+            midpoint_texts.append(text)
 
-    
-    edge_trace = go.Scatter3d(x=edge_x, y=edge_y, z=edge_z, mode='lines', line=dict(color='red', width=4), hoverinfo='text', text=relationships)
+    # Add relationship edges
+    edge_trace = go.Scatter3d(
+        x=edge_x, y=edge_y, z=edge_z, 
+        mode='lines', 
+        line=dict(color='red', width=4), 
+    )
     edge_trace.name = 'relationships'
     fig.add_trace(edge_trace)
+
+    # Add midpoint points with relationship text
+    if midpoints:
+        midpoint_x, midpoint_y, midpoint_z = zip(*midpoints)
+        midpoint_trace = go.Scatter3d(
+            x=midpoint_x, y=midpoint_y, z=midpoint_z,
+            mode='markers',
+            marker=dict(size=5, color='red'),
+            text=midpoint_texts,
+            textposition='top center',
+            hoverinfo='text'
+        )
+        midpoint_trace.name = 'relationships'
+        fig.add_trace(midpoint_trace)
 
 
     fig.update_layout(title=name, legend=dict(itemsizing='constant'))  

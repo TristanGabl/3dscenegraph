@@ -1,10 +1,12 @@
 import json
 import os
 import glob
+import sys
+sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "../")))
 from utils.scenegraph3d_objects import Objects
 
 # Define file paths
-base_path = "3RScan/"
+base_path = "helper_repos/3RScan/"
 semseg_files = glob.glob(os.path.join(base_path, "data", "3RScan", "*", "semseg.v2.json"))
 objects_file = os.path.join(base_path, "3DSSG/objects.json")
 relationships_file = os.path.join(base_path, "3DSSG/relationships.json")

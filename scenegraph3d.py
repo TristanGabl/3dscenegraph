@@ -31,7 +31,7 @@ from utils.scenegraph3d_objects import Objects
 
 from utils.setup_logger import setup_logger
 from plot.plot_labeled_pointcloud import plot_labeled_pointcloud
-from utils.llm_gemini import generate_edge_relationships
+from dataset.relation_net import generate_edge_relationship, load_model
 
 from utils.open_clip_ import compute_similarity
 from utils.find_clusters import find_best_kmeans_clusters
@@ -115,9 +115,11 @@ class SceneGraph3D:
 
         # extract class names and colors from metadata
         self.id_to_class = {i: name for i, name in enumerate(self.metadata.stuff_classes)}
+        self.id_to_class[-1] = "background"
         self.id_to_class_color = {i: color for i, color in enumerate(self.metadata.stuff_colors)}
+        self.id_to_class_color[-1] = [0, 0, 0] # black
 
-        with open("coco_id_to_name.json", "w") as json_file:
+        with open("label_mapping/coco_id_to_name.json", "w") as json_file:
             json.dump(self.id_to_class, json_file, indent=4)
 
 
@@ -149,15 +151,23 @@ class SceneGraph3D:
         with open(os.path.join(self.result_output_scan_path, 'objects.json'), 'w') as f:
             json.dump(self.objects_json, f, indent=4)
         
-        
-        self.context_matrix, self.edge_relationships = generate_edge_relationships(self.objects_json, self.USE_LLM)
-
-        
-        # Save context_matrix to a JSON file as a 1D array
-        context_matrix_1d = [item for sublist in self.context_matrix for item in sublist if item != ""]
-        with open(os.path.join(self.result_output_scan_path, 'context_matrix.json'), 'w') as f:
-            json.dump(context_matrix_1d, f, indent=4)
-        self.logger.info("Saved context_matrix to context_matrix.json")
+        coco_name_to_name_simplified = json.load(open("label_mapping/coco_name_to_name_simplified.json", 'r'))
+        relation_net_model, name2idx, label2idx, idx2label = load_model("dataset/relation_model.pth", self.device)
+        self.edge_relationships = [["" for _ in range(len(self.objects))] for _ in range(len(self.objects))]
+        for object1 in self.objects:
+            for object2 in self.objects:
+                if object1.object_id in set(object2.neighbors):
+                    obj1 = object1.__class__(**object1.__dict__.copy())
+                    obj2 = object2.__class__(**object2.__dict__.copy())
+                    obj1.name = coco_name_to_name_simplified[obj1.name]
+                    obj2.name = coco_name_to_name_simplified[obj2.name]
+                    edge_forward = generate_edge_relationship(obj1, obj2, relation_net_model, name2idx, label2idx, idx2label)
+                    edge_backward = generate_edge_relationship(obj2, obj1, relation_net_model, name2idx, label2idx, idx2label)
+                    self.edge_relationships[object1.object_id][object2.object_id] = edge_forward
+                    self.edge_relationships[object2.object_id][object1.object_id] = edge_backward                    
+    
+        self.logger.info("Finished generating edge relationships")
+       
         # plot everything
         self.save_segmented_pointcloud()
 
@@ -716,20 +726,26 @@ class SceneGraph3D:
             
         return objects
     
-    def update_neighbors(self, objects, edges_boarders):
+    def update_neighbors(self, objects, edges_borders):
         self.logger.info("Updating neighbors...")
-        for edge in edges_boarders:
-            object_id_0 = np.where([edge[0] in obj.index_set for obj in objects])[0]
-            object_id_1 = np.where([edge[1] in obj.index_set for obj in objects])[0]
-            if len(object_id_0) == 0 or len(object_id_1) == 0:
+
+        # create a mapping from vertex index to object id
+        index_to_obj = {}
+        for obj_id, obj in enumerate(objects):
+            for idx in obj.index_set:
+                index_to_obj[idx] = obj_id
+
+        for a, b in edges_borders:
+            object_id_0 = index_to_obj.get(a)
+            object_id_1 = index_to_obj.get(b)
+            if object_id_0 is None or object_id_1 is None:
                 continue
 
-            object_id_0 = object_id_0[0]
-            object_id_1 = object_id_1[0]
+            # add each other as neighbors
             if object_id_1 not in objects[object_id_0].neighbors:
-                objects[object_id_0].neighbors.append(int(object_id_1))
+                objects[object_id_0].neighbors.append(object_id_1)
             if object_id_0 not in objects[object_id_1].neighbors:
-                objects[object_id_1].neighbors.append(int(object_id_0))
+                objects[object_id_1].neighbors.append(object_id_0)
         self.logger.info("Updated neighbors!")
 
 
