@@ -134,7 +134,7 @@ class SceneGraph3D:
         self.objects = self.create_3dscenegraph_objects()
 
         # make extra check in case two same objects are next to each other
-        # self.objects = self.duplicate_double_check_mask2former(self.objects)
+        self.objects = self.duplicate_double_check_mask2former(self.objects)
         # self.objects = self.duplicate_double_check_kmeans(objects)
         self.update_neighbors(self.objects, self.edges_boarders)
 
@@ -261,20 +261,46 @@ class SceneGraph3D:
         new_objects = []
         new_objects_id = 0  
         for obj in objects:
+            if any(keyword in obj.name.lower().replace('-', ' ').split() for keyword in ["floor", "wall", "table", "ceiling"]):
+                print("Skipping floor or wall")
+                obj.object_id = new_objects_id
+                # obj.name = obj.name + " " + str(new_objects_id)
+                new_objects_id += 1
+                new_objects.append(obj)
+                pbar.update()
+                continue
+
             # go over images that see the object and find image that features the most instances of the object type
             # frames_tmp = [frame for idx in blob for frame in self.mesh_vertices_frame_observations[idx]]
             frames_tmp = np.unique([frame for idx in obj.index_set for frame in self.mesh_vertices_frame_observations[idx]])
 
             best_perspective_frame = None
             object_count_best = -1
+            vertices_count_best = -1
             for frame in frames_tmp:
                 image_path = os.path.join(self.full_output_scan_path, frame)
                 panoptic_seg, panoptic_seg_info = pickle.load(open(image_path + '.pkl', 'rb'))
 
                 object_count = np.sum(segment_info['category_id'] == obj.class_id for segment_info in panoptic_seg_info)
-                if object_count > object_count_best:
-                    best_perspective_frame = frame
-                    object_count_best = object_count
+                if object_count >= object_count_best:
+
+                    # load from saved files
+                    image_path = os.path.join(self.full_output_scan_path, frame)
+                    panoptic_seg, panoptic_seg_info = pickle.load(open(image_path + '.pkl', 'rb'))
+                    image_info = json.load(open(image_path + '.json', 'r'))
+
+                    # create mask for object, need no depth image since the old index set is already filtered by depth 
+                    dummy_image = np.zeros((panoptic_seg.shape[0], panoptic_seg.shape[1], 3), dtype=np.uint8)
+                    if self.scan_type == "scannet":
+                        projections_filtered, projections_filtered_mask = self.project_pointcloud_scannet(image_info, dummy_image, self.mesh_vertices[obj.index_set])
+                    else:
+                        projections_filtered, projections_filtered_mask = self.project_pointcloud_3dscannerapp(image_info, dummy_image, self.mesh_vertices[obj.index_set])
+
+                    point_values = panoptic_seg[projections_filtered[:, 1], projections_filtered[:, 0]]
+                    if len(point_values) > vertices_count_best:
+                        best_perspective_frame = frame
+                        object_count_best = object_count
+                        vertices_count_best = len(point_values)
 
                     
             # load from saved files
@@ -283,58 +309,68 @@ class SceneGraph3D:
             image_info = json.load(open(image_path + '.json', 'r'))
 
             local_class_values = [i for i, _ in enumerate(panoptic_seg_info) if panoptic_seg_info[i]['category_id'] == obj.class_id]
-            if any(keyword in obj.name.lower().replace('-', ' ').split() for keyword in ["floor", "wall", "table", "ceiling"]) or len(local_class_values) == 1:
+            if len(local_class_values) == 1:
                 print("Skipping floor or wall, etc., or single object")
                 obj.object_id = new_objects_id
-                obj.name = obj.name + " " + str(new_objects_id)
+                # obj.name = obj.name + " " + str(new_objects_id)
                 new_objects_id += 1
                 new_objects.append(obj)
                 pbar.update()
                 continue
             pbar.set_description("Checking for duplicates (mask2former): {}".format(obj.name))
-            pbar.update()            
+            pbar.update()    
 
-            # create mask for object
-            pose = np.array(image_info['cameraPoseARFrame']).reshape((4, 4))
-            projection_matrix = np.array(image_info['projectionMatrix']).reshape((4, 4))
-            view_matrix = np.linalg.inv(pose)
-            mvp = np.dot(projection_matrix, view_matrix)
+ 
+            # create mask for object, need no depth image since the old index set is already filtered by depth 
+            dummy_image = np.zeros((panoptic_seg.shape[0], panoptic_seg.shape[1], 3), dtype=np.uint8)
+            if self.scan_type == "scannet":
+                projections_filtered, projections_filtered_mask = self.project_pointcloud_scannet(image_info, dummy_image, self.mesh_vertices[obj.index_set])
+            else:
+                projections_filtered, projections_filtered_mask = self.project_pointcloud_3dscannerapp(image_info, dummy_image, self.mesh_vertices[obj.index_set])        
 
-            projections = self.project_points_to_image(self.mesh_vertices[obj.index_set], mvp, panoptic_seg.shape[1], panoptic_seg.shape[0])
-            projections_2d = np.round(projections[:,:2]).astype(int) # round to nearest pixel
-            projections_2d = projections_2d[
-                (projections_2d[:, 0] >= 0) & 
-                (projections_2d[:, 0] < panoptic_seg.shape[1]) &
-                (projections_2d[:, 1] >= 0) & 
-                (projections_2d[:, 1] < panoptic_seg.shape[0])
-            ]
 
-            # Check the value of each point in projections_2d in the panoptic_seg
-            point_values = panoptic_seg[projections_2d[:, 1], projections_2d[:, 0]]
+           
+            # Check the value of each point in projections_filtered in the panoptic_seg
+            point_values = panoptic_seg[projections_filtered[:, 1], projections_filtered[:, 0]]
             
             # If there are multiple unique values for the object's class, split the object
-
             self.logger.info(f"Object {obj.name} has multiple segments in the panoptic segmentation.")
             for value in local_class_values:
                 new_index_set = np.array(obj.index_set)[np.where(np.isin(point_values, value+1))[0]]
+                if len(new_index_set) == 0:
+                    continue
+
+                object_id = new_objects_id
+                object_class = self.id_to_class[self.mesh_vertices_classes[new_index_set[0]]]
+                class_id = obj.class_id
+                center = np.mean(self.mesh_vertices[new_index_set], axis=0)
+                min_coords = np.min(self.mesh_vertices[new_index_set], axis=0)
+                max_coords = np.max(self.mesh_vertices[new_index_set], axis=0)
+                size_x = max_coords[0] - min_coords[0]
+                size_y = max_coords[1] - min_coords[1]
+                size_z = max_coords[2] - min_coords[2]
+
                 new_object = Objects(
-                    obj.name + f"_{new_objects_id}",
-                    new_objects_id,
-                    obj.class_id,
-                    new_index_set,
-                    np.mean(self.mesh_vertices[new_index_set], axis=0)[0],
-                    np.mean(self.mesh_vertices[new_index_set], axis=0)[1],
-                    np.mean(self.mesh_vertices[new_index_set], axis=0)[2],
-                    [],
-                    [],
-                    best_perspective_frame
+                    name=object_class, 
+                    object_id=object_id, 
+                    class_id=class_id, 
+                    x=center[0], 
+                    y=center[1], 
+                    z=center[2],
+                    size_x=size_x,
+                    size_y=size_y,
+                    size_z=size_z,
+                    index_set=new_index_set,
+                    neighbors=obj.neighbors,
+                    relations=obj.relations,
+                    best_perspective_frame=best_perspective_frame
                 )
                 new_objects.append(new_object)
                 new_objects_id += 1
         
         pbar.close()
         #update neighbors
-        self.update_neighbors(new_objects, self.edges_boarders)
+        # self.update_neighbors(new_objects, self.edges_boarders)
         return new_objects
 
     
@@ -601,11 +637,14 @@ class SceneGraph3D:
         
         return projections_class_votes_local, mesh_vertices_votes_global
         
-    def project_pointcloud_scannet(self, image_info, image):
+    def project_pointcloud_scannet(self, image_info, image, vertices=None):
         pose = np.array(image_info['Pose']).reshape((4, 4))
         pose = np.linalg.inv(pose)
         # Convert 3D points to homogeneous coordinates
-        points_homogeneous = np.hstack((self.mesh_vertices, np.ones((self.mesh_vertices.shape[0], 1))))  # Shape: [N, 4]
+        if vertices is None:
+            points_homogeneous = np.hstack((self.mesh_vertices, np.ones((self.mesh_vertices.shape[0], 1))))  # Shape: [N, 4]
+        else:
+            points_homogeneous = np.hstack((vertices, np.ones((vertices.shape[0], 1))))
         points_camera = np.dot(points_homogeneous, pose.T)
 
         K = np.array(image_info['calibrationColorIntrinsic'])[:3, :3]
@@ -639,7 +678,7 @@ class SceneGraph3D:
 
 
 
-    def project_pointcloud_3dscannerapp(self, image_info, image):
+    def project_pointcloud_3dscannerapp(self, image_info, image, vertices=None):
         # compute the model view projection matrix
 
         pose = np.array(image_info['cameraPoseARFrame']).reshape((4, 4))
@@ -648,7 +687,10 @@ class SceneGraph3D:
         mvp = np.dot(projection_matrix, view_matrix)
         
         # project the 3d point cloud and filter out points that are not in the image
-        projections = self.project_points_to_image(self.mesh_vertices, mvp, image.shape[1], image.shape[0])
+        if vertices is None:
+            projections = self.project_points_to_image(self.mesh_vertices, mvp, image.shape[1], image.shape[0])
+        else:
+            projections = self.project_points_to_image(vertices, mvp, image.shape[1], image.shape[0])
         projections_2d = np.round(projections[:,:2]).astype(int) # round to nearest pixel
         projections[:, :2] = projections_2d # store the z coordinate
         projections_filtered_mask = (projections[:, 0] >= 0) & (projections[:, 0] < image.shape[1]) & (projections[:, 1] >= 0) & (projections[:, 1] < image.shape[0])
@@ -855,3 +897,6 @@ class SceneGraph3D:
 # DONE:
 # use segmentation from mask2former on best perspective image to split image, use current split method on top - check
 
+
+# ask Daniel try ADE20K model for comparison?
+# try llm for material output or something simliar 
