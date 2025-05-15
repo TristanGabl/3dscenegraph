@@ -15,6 +15,7 @@ import torch
 import matplotlib.pyplot as plt
 import networkx as nx
 import plotly.graph_objects as go
+from collections import deque
 
 from detectron2.config import get_cfg
 from detectron2.data.detection_utils import read_image
@@ -136,10 +137,13 @@ class SceneGraph3D:
         # make extra check in case two same objects are next to each other
         self.objects = self.duplicate_double_check_mask2former(self.objects)
         # self.objects = self.duplicate_double_check_kmeans(objects)
-        self.update_neighbors(self.objects, self.edges_boarders)
 
         # assign lost vertices to nearest object by using BFS
-        # self.objects = self.assign_lost_vertices_to_nearest_object(objects)
+        self.assign_lost_vertices_to_nearest_object(self.objects, self.mesh_edges, self.mesh_vertices_classes)
+
+        
+
+        self.update_neighbors(self.objects, self.edges_boarders)
 
         if self.SAVE_OBJECTS:
             self.save_object_vertices(self.objects)
@@ -159,12 +163,16 @@ class SceneGraph3D:
                 if object1.object_id in set(object2.neighbors):
                     obj1 = object1.__class__(**object1.__dict__.copy())
                     obj2 = object2.__class__(**object2.__dict__.copy())
-                    obj1.name = coco_name_to_name_simplified[obj1.name]
-                    obj2.name = coco_name_to_name_simplified[obj2.name]
+                    obj1_name_with_number = obj1.name[:]
+                    obj2_name_with_number = obj2.name[:]
+                    obj1.name = coco_name_to_name_simplified[obj1.name.split(" #")[0]]
+                    obj2.name = coco_name_to_name_simplified[obj2.name.split(" #")[0]]
                     edge_forward = generate_edge_relationship(obj1, obj2, relation_net_model, name2idx, label2idx, idx2label)
                     edge_backward = generate_edge_relationship(obj2, obj1, relation_net_model, name2idx, label2idx, idx2label)
                     self.edge_relationships[object1.object_id][object2.object_id] = edge_forward
                     self.edge_relationships[object2.object_id][object1.object_id] = edge_backward                    
+                    obj1.name = obj1_name_with_number
+                    obj2.name = obj2_name_with_number
     
         self.logger.info("Finished generating edge relationships")
        
@@ -264,7 +272,7 @@ class SceneGraph3D:
             if any(keyword in obj.name.lower().replace('-', ' ').split() for keyword in ["floor", "wall", "table", "ceiling"]):
                 print("Skipping floor or wall")
                 obj.object_id = new_objects_id
-                # obj.name = obj.name + " " + str(new_objects_id)
+                obj.name = obj.name + " #" + str(new_objects_id)
                 new_objects_id += 1
                 new_objects.append(obj)
                 pbar.update()
@@ -282,25 +290,25 @@ class SceneGraph3D:
                 panoptic_seg, panoptic_seg_info = pickle.load(open(image_path + '.pkl', 'rb'))
 
                 object_count = np.sum(segment_info['category_id'] == obj.class_id for segment_info in panoptic_seg_info)
-                if object_count >= object_count_best:
 
-                    # load from saved files
-                    image_path = os.path.join(self.full_output_scan_path, frame)
-                    panoptic_seg, panoptic_seg_info = pickle.load(open(image_path + '.pkl', 'rb'))
-                    image_info = json.load(open(image_path + '.json', 'r'))
+                # load from saved files
+                image_path = os.path.join(self.full_output_scan_path, frame)
+                panoptic_seg, panoptic_seg_info = pickle.load(open(image_path + '.pkl', 'rb'))
+                image_info = json.load(open(image_path + '.json', 'r'))
 
-                    # create mask for object, need no depth image since the old index set is already filtered by depth 
-                    dummy_image = np.zeros((panoptic_seg.shape[0], panoptic_seg.shape[1], 3), dtype=np.uint8)
-                    if self.scan_type == "scannet":
-                        projections_filtered, projections_filtered_mask = self.project_pointcloud_scannet(image_info, dummy_image, self.mesh_vertices[obj.index_set])
-                    else:
-                        projections_filtered, projections_filtered_mask = self.project_pointcloud_3dscannerapp(image_info, dummy_image, self.mesh_vertices[obj.index_set])
+                # create mask for object, need no depth image since the old index set is already filtered by depth 
+                dummy_image = np.zeros((panoptic_seg.shape[0], panoptic_seg.shape[1], 3), dtype=np.uint8)
+                if self.scan_type == "scannet":
+                    projections_filtered, projections_filtered_mask = self.project_pointcloud_scannet(image_info, dummy_image, self.mesh_vertices[obj.index_set])
+                else:
+                    projections_filtered, projections_filtered_mask = self.project_pointcloud_3dscannerapp(image_info, dummy_image, self.mesh_vertices[obj.index_set])
 
-                    point_values = panoptic_seg[projections_filtered[:, 1], projections_filtered[:, 0]]
-                    if len(point_values) > vertices_count_best:
-                        best_perspective_frame = frame
-                        object_count_best = object_count
-                        vertices_count_best = len(point_values)
+                point_values = panoptic_seg[projections_filtered[:, 1], projections_filtered[:, 0]]
+
+                if object_count > object_count_best or (object_count == object_count_best and len(point_values) > vertices_count_best):
+                    best_perspective_frame = frame
+                    object_count_best = object_count
+                    vertices_count_best = len(point_values)
 
                     
             # load from saved files
@@ -312,7 +320,7 @@ class SceneGraph3D:
             if len(local_class_values) == 1:
                 print("Skipping floor or wall, etc., or single object")
                 obj.object_id = new_objects_id
-                # obj.name = obj.name + " " + str(new_objects_id)
+                obj.name = obj.name + " #" + str(new_objects_id)
                 new_objects_id += 1
                 new_objects.append(obj)
                 pbar.update()
@@ -341,7 +349,7 @@ class SceneGraph3D:
                     continue
 
                 object_id = new_objects_id
-                object_class = self.id_to_class[self.mesh_vertices_classes[new_index_set[0]]]
+                object_class = self.id_to_class[self.mesh_vertices_classes[new_index_set[0]]] + " #" + str(new_objects_id)
                 class_id = obj.class_id
                 center = np.mean(self.mesh_vertices[new_index_set], axis=0)
                 min_coords = np.min(self.mesh_vertices[new_index_set], axis=0)
@@ -374,9 +382,122 @@ class SceneGraph3D:
         return new_objects
 
     
-    def assign_lost_vertices_to_nearest_object(self, objects):
+    def assign_lost_vertices_to_nearest_object(self, objects, mesh_edges, vertices_classes):
+        # Create an array of sets to group objects by category
+        ids = np.unique([obj.class_id for obj in objects])
+        object_sets = {obj_class: set() for obj_class in ids}
+        
+        [object_sets[obj.class_id].add(obj.object_id) for obj in objects]
 
-        pass
+
+        for objs in object_sets:
+            class_vert_idxs = np.where(vertices_classes == objs)[0]
+
+            # pick only edges whose both ends lie in class_vert_idxs
+            mask0 = np.isin(mesh_edges[:, 0], class_vert_idxs)
+            mask1 = np.isin(mesh_edges[:, 1], class_vert_idxs)
+            sub_edges = mesh_edges[mask0 & mask1]
+
+            G = nx.Graph()
+            G.add_edges_from(sub_edges)
+
+            # 2) initialize multi‐source BFS
+            # assignment[v] = the object_id that “owns” v
+            assignment = {}
+            queue = deque()
+
+            # seed the queue with each object's existing index_set
+            for obj in [objects[i] for i in object_sets[objs]]:
+                for v in obj.index_set:
+                    if v in G:                   # only if v appears in the subgraph
+                        assignment[v] = obj.object_id
+                        queue.append((v, obj.object_id))
+                        # Plot the graph
+                    # pos = {i: [self.mesh_vertices[i][0], -self.mesh_vertices[i][2]] for i in G.nodes}
+            # draw all nodes/edges
+            # unique_oids = sorted(set(assignment.values()))
+            # # pick a qualitative colormap with enough distinct colors
+            # cmap = plt.cm.get_cmap('tab20', len(unique_oids))
+            # node_colors = []
+            # for v in G.nodes():
+            #     oid = assignment.get(v)
+            #     if oid is not None:
+            #         idx = unique_oids.index(oid)
+            #         node_colors.append(cmap(idx))
+            #     else:
+            #         node_colors.append((0.8, 0.8, 0.8, 1.0))  # light gray for “unassigned” if any
+
+            # # 4) draw!
+            # plt.figure(figsize=(10, 10))
+            # nx.draw(
+            #     G, pos,
+            #     node_color=node_colors,
+            #     with_labels=True,
+            #     node_size=50,
+            #     font_size=8,
+            #     edge_color="gray"
+            # )
+
+            # # 5) legend hacks: one invisible point per object_id
+            # for idx, oid in enumerate(unique_oids):
+            #     plt.scatter([], [], color=cmap(idx), label=f"Obj {oid}", s=50)
+            # plt.legend(scatterpoints=1, fontsize=8, title="Assignments")
+            # plt.title(f"Class {objs} – vertex → object assignment")
+            # plt.show()
+            
+
+            # 3) BFS expansion
+            while queue:
+                v, oid = queue.popleft()
+                for nbr in G.neighbors(v):
+                    if nbr not in assignment:
+                        assignment[nbr] = oid
+                        queue.append((nbr, oid))
+            # 4) check for unassigned vertices
+            # node_colors = []
+            # for v in G.nodes():
+            #     oid = assignment.get(v)
+            #     if oid is not None:
+            #         idx = unique_oids.index(oid)
+            #         node_colors.append(cmap(idx))
+            #     else:
+            #         node_colors.append((0.8, 0.8, 0.8, 1.0))  # light gray for “unassigned” if any
+
+            # 4) draw!
+            # plt.figure(figsize=(10, 10))
+            # nx.draw(
+            #     G, pos,
+            #     node_color=node_colors,
+            #     with_labels=True,
+            #     node_size=50,
+            #     font_size=8,
+            #     edge_color="gray"
+            # )
+
+            # # 5) legend hacks: one invisible point per object_id
+            # for idx, oid in enumerate(unique_oids):
+            #     plt.scatter([], [], color=cmap(idx), label=f"Obj {oid}", s=50)
+            # plt.legend(scatterpoints=1, fontsize=8, title="Assignments")
+            # plt.title(f"Class {objs} – vertex → object assignment")
+            # plt.show()
+
+            # 4) propagate back into each obj.index_set
+            # clear and refill each object's index_set from the assignment
+            for obj in [objects[i] for i in object_sets[objs]]:
+                # collect all vertices claimed by this object_id
+                obj.index_set = {v for v, owner in assignment.items() if owner == obj.object_id}
+
+
+
+            # Plot the graph
+            # plt.figure(figsize=(10, 10))
+            # pos = {i: [self.mesh_vertices[i][0], -self.mesh_vertices[i][2]] for i in G.nodes}
+            # nx.draw(G, pos, with_labels=True, node_size=50, font_size=8, node_color="skyblue", edge_color="gray")
+            # plt.title(f"Graph for Class {objs}")
+            # plt.show()
+
+            
+        
 
             
 
