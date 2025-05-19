@@ -28,9 +28,9 @@ class EdgeDataset(Dataset):
 
         # prompt text: join your text‐fields (e.g. "objA, objB")
         self.texts = (df[input_feats_text]
-                         .astype(str)
-                         .agg(", ".join, axis=1)
-                         .tolist())
+                 .astype(str)
+                 .agg(lambda x: f"Relation between {x[0]} and {x[1]} is:", axis=1)
+                 .tolist())
 
         # ground‐truth relation (sentence) as strings
         self.gt_texts = df[gt_col].astype(str).tolist()
@@ -118,7 +118,7 @@ device = 'cuda' if torch.cuda.is_available() else 'cpu'
 
 tokenizer = GPT2Tokenizer.from_pretrained('gpt2')
 tokenizer.pad_token = tokenizer.eos_token  # so padding is valid
-tokenizer.padding_side = "left"  # so that the features are aligned with the text
+tokenizer.padding_side = "right"  # so that the features are aligned with the text
 
 config = GPT2Config.from_pretrained('gpt2')
 model  = GPT2WithFeats(config, n_feats=10) # 10 numeric features
@@ -147,7 +147,7 @@ scheduler = get_linear_schedule_with_warmup(
 
 
 # 4) Training loop ----------------------------------------------------------
-if (False):
+if (False):  # set to False to skip training
     model.train()
     for epoch in range(epochs):
         epoch_loss = 0.0
@@ -193,15 +193,45 @@ else:
             attention_mask = batch["attention_mask"].to(device)
             feats          = batch["features"].to(device)
 
+            # Decode input prompts to show what objects are being fed
+            input_texts = tokenizer.batch_decode(input_ids, skip_special_tokens=True)
+
+            # Instead of feeding "objA, objB", create a more explicit prompt:
+            # Example: "Relation between cup and table is"
+            explicit_prompts = [
+                f"Relation between {text} is"
+                for text in input_texts
+            ]
+
+            # Tokenize these explicit prompts (left padded)
+            enc_prompts = tokenizer(
+                explicit_prompts,
+                truncation=True,
+                padding="max_length",
+                max_length=64,
+                return_tensors="pt"
+            )
+            input_ids_explicit = enc_prompts["input_ids"].to(device)
+            attention_mask_explicit = enc_prompts["attention_mask"].to(device)
+
+            # Generate relation continuations after the prompt
             outputs = model.generate(
-                input_ids=input_ids,
-                attention_mask=attention_mask,
+                input_ids=input_ids_explicit,
+                attention_mask=attention_mask_explicit,
                 features=feats,
-                max_new_tokens=32,  # Generate up to 32 new tokens
-                num_return_sequences=1
+                max_new_tokens=32,
+                num_return_sequences=1,
+                pad_token_id=tokenizer.eos_token_id  # avoid warning about no pad token
             )
 
-            # decode the generated tokens
+            # Decode generated sequences
             generated_texts = tokenizer.batch_decode(outputs, skip_special_tokens=True)
-            print(f"Generated texts: {generated_texts}")
-            break
+
+            # Print prompt and generated relation (remove the prompt part for clarity)
+            for prompt, gen_text in zip(explicit_prompts, generated_texts):
+                relation = gen_text[len(prompt):].strip()  # get generated part only
+                print(f"Input objects: {prompt[len('Relation between '):-len(' is')]}")
+                print(f"Predicted relation: {relation}")
+                print("-----")
+
+            break  # just do first batch for demo
