@@ -10,3 +10,6 @@ model_weights/**
 !scans/.gitkeep
 !model_weights/.gitkeep
 
+dataset/*.pth
+gpt2-scenegraph-finetuned*
+results_folder*

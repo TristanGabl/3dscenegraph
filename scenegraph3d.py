@@ -136,7 +136,7 @@ class SceneGraph3D:
 
         # make extra check in case two same objects are next to each other
         self.objects = self.duplicate_double_check_mask2former(self.objects)
-        # self.objects = self.duplicate_double_check_kmeans(objects)
+        # self.objects = self.duplicate_double_check_kmeans(self.objects)
 
         # assign lost vertices to nearest object by using BFS
         self.assign_lost_vertices_to_nearest_object(self.objects, self.mesh_edges, self.mesh_vertices_classes)
@@ -498,9 +498,6 @@ class SceneGraph3D:
 
             
         
-
-            
-
     def duplicate_double_check_kmeans(self, objects):
         pbar = tqdm.tqdm(
             total=len(objects),
@@ -644,6 +641,9 @@ class SceneGraph3D:
             else:
                 projections_filtered, projections_filtered_mask = self.project_pointcloud_3dscannerapp(image_info, image)
 
+            if len(projections_filtered) == 0:
+                self.logger.warning("No points projected into image, skipping this frame")
+                continue
             # remember what image a vertex was observed in
             [mesh_vertices_frame_observations[idx].add(frame.split("/")[-1]) for idx in np.where(projections_filtered_mask)[0]]
             
@@ -909,6 +909,20 @@ class SceneGraph3D:
                 objects[object_id_0].neighbors.append(object_id_1)
             if object_id_0 not in objects[object_id_1].neighbors:
                 objects[object_id_1].neighbors.append(object_id_0)
+        
+        # Make objects neighbors if their centers are within 1.0m
+        if (False):
+            for i, obj1 in enumerate(objects):
+                for j, obj2 in enumerate(objects):
+                    if i != j:
+                        distance = np.linalg.norm(
+                        np.array([obj1.x, obj1.y, obj1.z]) - np.array([obj2.x, obj2.y, obj2.z])
+                        )
+                        if distance <= 1.0:
+                            if obj2.object_id not in obj1.neighbors:
+                                obj1.neighbors.append(obj2.object_id)
+                            if obj1.object_id not in obj2.neighbors:
+                                obj2.neighbors.append(obj1.object_id)
         self.logger.info("Updated neighbors!")
 
 
@@ -946,15 +960,16 @@ class SceneGraph3D:
 
     def save_object_vertices(self, objects):
         # Save each object as a separate .obj file
-        if self.DEBUG:
-            os.makedirs(self.object_output_scan_path, exist_ok=True)
-            # Remove all .obj files in the folder
-            for file in os.listdir(self.object_output_scan_path):
-                if file.endswith(".obj"):
-                    os.remove(os.path.join(self.object_output_scan_path, file))
-                    self.logger.debug(f"Removed file: {file}")
 
-            for obj in objects:
+        os.makedirs(self.object_output_scan_path, exist_ok=True)
+        # Remove all .obj files in the folder
+        for file in os.listdir(self.object_output_scan_path):
+            if file.endswith(".obj"):
+                os.remove(os.path.join(self.object_output_scan_path, file))
+                self.logger.debug(f"Removed file: {file}")
+
+        for obj in objects:
+            if len(obj.index_set) != 0:
                 obj_vertices = self.mesh_vertices[obj.index_set]
 
                 obj_file_path = os.path.join(self.object_output_scan_path, f"{obj.name.replace(' ', '_')}_{len(obj.index_set)}_vertices.obj")
@@ -964,6 +979,8 @@ class SceneGraph3D:
                         obj_file.write(f"v {vertex[0]} {vertex[1]} {vertex[2]}\n")
 
                 self.logger.debug(f"Saved object {obj.name} to {obj_file_path}")
+            else:
+                self.logger.debug(f"Object {obj.name} has no vertices, skipping saving.")
             
                 
     

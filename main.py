@@ -34,8 +34,8 @@ DEBUG = False
 save_visualization = True
 save_objects = False
 FORCE_MASK2FORMER = False # if True, the mask2former model will be run even if the processed images already exist
-SHORTCUT_0 = False # if True, generating frame_XXXXX_projections.jpg will be skipped
-SHORTCUT_1 = False # if True, generating frame_XXXXX_fused_votes.jpg will be skipped
+SHORTCUT_0 = True # if True, generating frame_XXXXX_projections.jpg will be skipped
+SHORTCUT_1 = True # if True, generating frame_XXXXX_fused_votes.jpg will be skipped
 
 USE_LLM = False
 
@@ -45,7 +45,7 @@ def get_parser():
     parser = argparse.ArgumentParser(description="3dscenegraph pipeline using mask2former")
     parser.add_argument(
         "--config-file",
-        default="Mask2Former/configs/coco/panoptic-segmentation/swin/maskformer2_swin_large_IN21k_384_bs16_100ep.yaml",
+        default="helper_repos/Mask2Former/configs/coco/panoptic-segmentation/swin/maskformer2_swin_large_IN21k_384_bs16_100ep.yaml",
         metavar="FILE",
         help="path to config file (default set in main.py)",
     )
