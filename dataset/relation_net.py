@@ -156,6 +156,14 @@ def main():
         "mess", "messier than", "cleaner than", "fuller than", "same object type"
     }
     df = df[~df['relation'].isin(exclude_relations)]
+    
+    # Replace specific relations
+    df['relation'] = df['relation'].replace({'right': 'next to', 'left': 'next to'})
+
+    # Show statistics of the types of relationships in df["relation"]
+    relation_counts = df['relation'].value_counts()
+    print("Relationship statistics:")
+    print(relation_counts)
 
     name2idx = {name: i for i, name in enumerate(common_names)}
     n_names = len(name2idx)
@@ -181,6 +189,9 @@ def main():
     X_num = df[num_feats].values.astype(np.float32)
     X_cat = df[['src_id','tgt_id']].values.astype(np.int64)
     y = df['label'].values.astype(np.int64)
+
+    # Export the dataframe to a CSV file for analysis
+    df.to_csv('dataset/processed_relationship_data.csv', index=False)
 
     # Train/test split
     X_num_tr, X_num_val, X_cat_tr, X_cat_val, y_tr, y_val = train_test_split(
